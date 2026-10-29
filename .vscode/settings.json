@@ -1,0 +1,5 @@
+{
+    "platformio-ide.customPATH": "D:\\.platformio\\penv\\Scripts",
+    "platformio-ide.useBuiltinPIOCore": true,
+    "cmake.sourceDirectory": "D:/LearnEsp32/Repeater/lib/KWS"
+}

@@ -1,0 +1,35 @@
+{
+  "name": "KWS",
+  "version": "3.1.2",
+  "build": {
+    "flags": [
+      "-I src",
+      "-I edge-impulse-sdk",
+      "-I model-parameters",
+      "-I tflite-model",
+      "-O3",
+      "-g3",
+      "-w"
+    ],
+    "srcFilter": [
+      "+<*>",
+      "-<edge-impulse-sdk/tensorflow/lite/micro/testing/*>",
+      "-<edge-impulse-sdk/porting/mbed/*>",
+      "-<edge-impulse-sdk/porting/mingw32/*>",
+      "-<edge-impulse-sdk/porting/posix/*>",
+      "-<edge-impulse-sdk/porting/silabs/*>",
+      "-<edge-impulse-sdk/porting/stm32-cubeai/*>",
+      "-<edge-impulse-sdk/porting/ti/*>",
+      "-<edge-impulse-sdk/porting/zephyr/*>",
+      "-<edge-impulse-sdk/porting/sony/*>",
+      "-<edge-impulse-sdk/porting/synopsys/*>",
+      "-<edge-impulse-sdk/porting/nxp/*>",
+      "-<edge-impulse-sdk/porting/renesas/*>",
+      "-<edge-impulse-sdk/porting/himax/*>",
+      "-<edge-impulse-sdk/porting/infineon/*>",
+      "-<edge-impulse-sdk/porting/ethos-u/*>",
+      "-<edge-impulse-sdk/porting/arduino/*>",
+      "+<edge-impulse-sdk/porting/espressif/*>"
+    ]
+  }
+}
