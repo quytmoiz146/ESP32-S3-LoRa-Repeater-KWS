@@ -23,11 +23,6 @@ void stereo_init() {
   micFailed = false;
   failedChannel = -1;
   lastAnalysis = {};
-
-  Serial.printf("[STEREO] Init — dual mic, distance=%.1fcm, "
-                "imbalanceRatio=%.1f, imbalanceLimit=%d\n",
-                MIC_DISTANCE_CM, MIC_IMBALANCE_RATIO,
-                MIC_IMBALANCE_COUNT_LIMIT);
 }
 
 // ============================================================
@@ -124,13 +119,9 @@ StereoAnalysis stereo_analyze(const int16_t *left, const int16_t *right,
       micFailed = true;
       failedChannel = (result.rmsLeft < result.rmsRight) ? 0 : 1;
 
-      Serial.printf("[STEREO] *** MIC WARNING *** Channel %s appears "
-                    "failed/blocked! (L=%.1f, R=%.1f, %lu consecutive "
-                    "imbalanced blocks)\n",
+      Serial.printf("[WARN] Mic %s failed/blocked (L:%.0f, R:%.0f) -> Fallback single-mic\n",
                     (failedChannel == 0) ? "LEFT" : "RIGHT",
-                    result.rmsLeft, result.rmsRight,
-                    (unsigned long)imbalanceCounter);
-      Serial.println("[STEREO] Switching to single-mic fallback mode");
+                    result.rmsLeft, result.rmsRight);
     }
   } else {
     // Tín hiệu bình thường → reset bộ đếm
@@ -141,7 +132,7 @@ StereoAnalysis stereo_analyze(const int16_t *left, const int16_t *right,
     if (micFailed) {
       micFailed = false;
       failedChannel = -1;
-      Serial.println("[STEREO] Mic recovered — back to dual-mic mode");
+      Serial.println("[SYS] Mic recovered -> Restored dual-mic mode");
     }
   }
 

@@ -1,7 +1,7 @@
 #ifndef CONFIG_H
 #define CONFIG_H
 
-#include <driver/i2s.h>
+#include <stdint.h>
 
 #define LED 48
 #define ALARM_PIN 9
@@ -44,13 +44,6 @@ extern volatile unsigned long g_alarm_end_ms;
 #define SD_SCK_PIN 40  // Clock
 #define SD_MOSI_PIN 39 // MOSI
 #define SD_MISO_PIN 41 // MISO
-
-// ============================================================
-//  Cấu hình UART Debug (qua adapter USB-TTL → COM12)
-// ============================================================
-#define DEBUG_UART_RX 43 // RX (nhận từ adapter TX)
-#define DEBUG_UART_TX 44 // TX (gửi tới adapter RX)
-#define DEBUG_UART_BAUD 115200
 
 // ============================================================
 //  Cấu hình ghi âm WAV (giữ lại để thu data train AI)
@@ -100,10 +93,6 @@ extern volatile unsigned long g_alarm_end_ms;
 #define KWS_SLIDE_MS 500
 #define KWS_SLIDE_SAMPLES (I2S_SAMPLE_RATE * KWS_SLIDE_MS / 1000)
 
-// --- Moving Average Window ---
-// Số frame gần nhất để tính trung bình margin (~5s dữ liệu với 500ms stride)
-#define KWS_MA_WINDOW_N 10
-
 // --- Ngưỡng margin (bawl - max(noise,speech)) ---
 // Ngưỡng bắt đầu theo dõi candidate
 // 0.45 = bawl phải chiếm ≥72% confidence (vì margin = bawl - other ≥ 0.45
@@ -130,8 +119,6 @@ extern volatile unsigned long g_alarm_end_ms;
 // ============================================================
 //  Cấu hình Dual Mic — Phân tích chênh lệch kênh
 // ============================================================
-// Khoảng cách giữa 2 mic (cm) — dùng cho ước lượng hướng ITD
-#define MIC_DISTANCE_CM 9.0f
 // Ngưỡng chênh lệch energy L/R: max(L,R)/min(L,R) > ratio → bất thường
 #define MIC_IMBALANCE_RATIO 5.0f
 // Số khối liên tiếp vượt ngưỡng để báo cảnh báo mic hỏng (~100 × 32ms ≈ 3.2s)
@@ -182,16 +169,11 @@ extern volatile unsigned long g_alarm_end_ms;
 #define LORA_TCXO_VOLTAGE 0.0f
 
 // --- RF Parameters ---
-#define LORA_FREQUENCY        915.0f
+#define LORA_FREQUENCY        921.4f
 #define LORA_BANDWIDTH        125.0f
 #define LORA_SPREADING_FACTOR 9
 #define LORA_CODING_RATE      7
 #define LORA_TX_POWER         22
-
-// --- Mesh Network Roles & IDs ---
-#define ROLE_GATEWAY  0
-#define ROLE_ENDPOINT 1
-#define ROLE_REPEATER 2
 
 // ID mặc định của các loại thiết bị trong mạng mesh
 #define GATEWAY_ID   0
@@ -211,8 +193,8 @@ const char* lora_mesh_getMacString();
 #define LORA_PREAMBLE_LEN 16
 
 // --- Chế độ thu chu kỳ động (Dynamic RX Duty Cycle / RXPS) ---
-// Tạm thời tắt (0) để đảm bảo thu liên tục 100%, không bị lỡ gói tin khi kiểm tra giao tiếp giữa các node
-#define LORA_RX_DUTY_CYCLE_ENABLED 0
+// Chế độ tiết kiệm năng lượng kép (Tầng 1 - RF): SX1262 Dynamic RX Duty Cycle (MeshCore style)
+#define LORA_RX_DUTY_CYCLE_ENABLED 1
 #define RXPS_LEVEL_CONSERVATIVE 3
 #define RXPS_LEVEL_BALANCED     6
 #define RXPS_LEVEL_MAX          8
@@ -226,10 +208,19 @@ const char* lora_mesh_getMacString();
 #define LORA_CAD_ENABLED 1
 #define LORA_CAD_MAX_RETRIES 3
 
+// --- RX Watchdog (RXPS Watchdog - MeshCore style) ---
+// Tự động kiểm tra kẹt BUSY, lỗi SPI hoặc refresh chu kỳ RXPS nếu radio im lặng quá lâu
+#define LORA_RX_WATCHDOG_ENABLED    1
+#define LORA_RX_WATCHDOG_TIMEOUT_MS 45000UL // 45 giây kiểm tra & khôi phục radio
+
+// --- Định tuyến Mesh: Kích hoạt Unicast Next-Hop ---
+// Khi đã học được tuyến đường, gửi đích danh qua next_hop thay vì flood broadcast
+#define LORA_UNICAST_ROUTING_ENABLED 1
+
 // --- Quản lý giấc ngủ MCU (Light Sleep cho ESP32 Repeater) ---
-// Repeater cần trực nhận 24/7 và chuyển tiếp tức thì (<1ms), tắt Light Sleep để tránh trễ và đảm bảo ổn định tuyệt đối
-#define LORA_LIGHT_SLEEP_ENABLED 0
-#define LORA_LIGHT_SLEEP_PERIOD_MS 10000 // Tự động thức sau 10s để chạy tác vụ nền
+// Chế độ tiết kiệm năng lượng kép (Tầng 2 - MCU): Light Sleep khi rảnh rỗi, thức dậy bằng DIO1 (<0.5ms) hoặc Timer
+#define LORA_LIGHT_SLEEP_ENABLED 1
+#define LORA_LIGHT_SLEEP_PERIOD_MS 5000 // Tự động thức sau 5s để chạy tác vụ nền & kiểm tra lệnh Serial
 
 // --- QoS: Cơ chế Xác nhận (ACK) & Gửi lại (Retries) ---
 #define LORA_QOS_ACK_TIMEOUT_MS 1800 // Timeout đợi ACK (ms)
@@ -238,7 +229,6 @@ const char* lora_mesh_getMacString();
 // --- Giám sát Pin & Bảo vệ Sụt nguồn (Battery Protection) ---
 #define PIN_VBAT_READ           1     // Chân ADC đọc pin (GPIO1 - ADC1 CH0 trên ESP32-S3)
 #define BATTERY_DIVIDER_RATIO   2.0f  // Hệ số cầu phân áp (100k : 100k -> x2)
-#define BATTERY_LOW_MV          3300  // Ngưỡng pin yếu (3.3V)
 #define BATTERY_CRITICAL_MV     3000  // Ngưỡng kiệt pin khẩn cấp (3.0V -> Deep Sleep bảo vệ)
 
 // --- Telemetry & Giám sát Định kỳ (Periodic Heartbeat) ---

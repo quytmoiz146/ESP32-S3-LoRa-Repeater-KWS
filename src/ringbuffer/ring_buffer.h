@@ -31,10 +31,4 @@ void ringBuffer_write(const int16_t* samples, size_t count);
 /// @return Số mẫu thực tế đọc được (có thể < count nếu buffer chưa đủ dữ liệu)
 size_t ringBuffer_readLatest(int16_t* dest, size_t count);
 
-/// Lấy số mẫu hiện có trong ring buffer
-size_t ringBuffer_available();
-
-/// Lấy handle của mutex (dùng cho debug/monitoring)
-SemaphoreHandle_t ringBuffer_getMutex();
-
 #endif // RING_BUFFER_H

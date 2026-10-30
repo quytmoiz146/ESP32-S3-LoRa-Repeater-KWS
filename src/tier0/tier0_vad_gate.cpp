@@ -80,9 +80,7 @@ bool tier0_vad_process(const int16_t* samples, size_t count) {
         noiseFloor = (avgEnergy > vadCfg.minNoiseFloor) ? avgEnergy : vadCfg.minNoiseFloor;
 
         vadState = VAD_STATE_INACTIVE;
-        Serial.printf("[VAD] Calibration done — noiseFloor=%.1f "
-                      "(from %lu blocks, avg energy=%.1f)\n",
-                      noiseFloor, (unsigned long)calibCount, avgEnergy);
+        Serial.printf("[VAD] Calibrated: noiseFloor=%.1f\n", noiseFloor);
       }
       return false; // Gate OFF trong calibration
     }
@@ -100,9 +98,8 @@ bool tier0_vad_process(const int16_t* samples, size_t count) {
         activeStartMs = nowMs;  // Ghi nhớ thời điểm bắt đầu ACTIVE
         gateJustOpened = true;
 
-        Serial.printf("[VAD] Gate ON — energy=%.1f >= threshold=%.1f "
-                      "(floor=%.1f × %.1f)\n",
-                      energy, onThreshold, noiseFloor, vadCfg.onMultiplier);
+        Serial.printf("[VAD] Gate ON (energy:%.0f >= thr:%.0f, floor:%.0f)\n",
+                      energy, onThreshold, noiseFloor);
         return true;
       }
 
@@ -142,10 +139,8 @@ bool tier0_vad_process(const int16_t* samples, size_t count) {
         vadState = VAD_STATE_INACTIVE;
         // Gán noiseFloor = energy hiện tại (chấp nhận đây là ambient mới)
         noiseFloor = (energy > vadCfg.minNoiseFloor) ? energy : vadCfg.minNoiseFloor;
-        Serial.printf("[VAD] Gate OFF — MAX ACTIVE TIMEOUT (%lums) — "
-                      "force noiseFloor=%.1f (energy=%.1f)\n",
-                      (unsigned long)vadCfg.maxActiveDurationMs,
-                      noiseFloor, energy);
+        Serial.printf("[VAD] Gate OFF (Timeout %lums, floor:%.0f)\n",
+                      (unsigned long)vadCfg.maxActiveDurationMs, noiseFloor);
         return false;
       }
 
@@ -153,9 +148,7 @@ bool tier0_vad_process(const int16_t* samples, size_t count) {
       if (energy < offThreshold && nowMs >= holdUntilMs) {
         // Transition: Active → Inactive
         vadState = VAD_STATE_INACTIVE;
-        Serial.printf("[VAD] Gate OFF — energy=%.1f < offThreshold=%.1f, "
-                      "hold expired\n",
-                      energy, offThreshold);
+        Serial.printf("[VAD] Gate OFF (energy:%.0f < thr:%.0f)\n", energy, offThreshold);
         return false;
       }
 

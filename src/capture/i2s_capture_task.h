@@ -3,6 +3,7 @@
 
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <driver/i2s.h>
 
 // ============================================================
 //  taskI2SCapture — Core 0, Priority 5

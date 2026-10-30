@@ -50,13 +50,6 @@ const char* lora_mesh_getMacString() {
   return g_device_mac_str;
 }
 
-void lora_mesh_getMac(uint8_t mac[6]) {
-  if (g_my_node_id == 0) {
-    lora_mesh_initNodeId();
-  }
-  memcpy(mac, g_device_mac, 6);
-}
-
 // ============================================================
 //  SX1262 Hardware Setup (Ra-01SH module)
 // ============================================================
@@ -122,6 +115,12 @@ static uint32_t stats_rx_total = 0;
 static uint32_t stats_relayed = 0;
 static uint32_t stats_dropped_seen = 0;
 static uint32_t stats_tx_sos = 0;
+static uint32_t stats_rx_wd_resets = 0;
+static uint32_t last_rx_activity_ms = 0;
+
+uint32_t lora_mesh_getWatchdogResets() {
+  return stats_rx_wd_resets;
+}
 
 // ============================================================
 //  Dynamic RXPS Timings (MeshCore Derivation Formula)
@@ -176,7 +175,7 @@ uint16_t lora_mesh_getBatteryMilliVolts() {
 void lora_mesh_checkBatteryProtection() {
   uint16_t mv = lora_mesh_getBatteryMilliVolts();
   if (mv >= 2000 && mv <= BATTERY_CRITICAL_MV) {
-    Serial.printf("[BATTERY] CRITICAL VOLTAGE (%dmV <= %dmV)! Entering Deep Sleep to protect cell!\n",
+    Serial.printf("[WARN] Critical Battery (%dmV <= %dmV)! Entering Deep Sleep\n",
                   mv, BATTERY_CRITICAL_MV);
     radio.sleep();
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
@@ -233,6 +232,22 @@ static uint8_t findNextHop(uint8_t dest_id) {
   return BROADCAST_ID;
 }
 
+void lora_mesh_printRoutingTable() {
+  Serial.printf("\n--- Routing Table (%u routes) ---\n", route_count);
+  if (route_count == 0) {
+    Serial.println("  (Empty - awaiting mesh packets)");
+  } else {
+    for (uint8_t i = 0; i < route_count; i++) {
+      uint32_t age_s = (millis() - routing_table[i].timestamp) / 1000;
+      Serial.printf("  [%u] Dest:%u -> NextHop:%u | Hops:%u | RSSI:%.1fdBm | Age:%lus%s\n",
+                    i, routing_table[i].dest_id, routing_table[i].next_hop,
+                    routing_table[i].hop_count, routing_table[i].last_rssi,
+                    (unsigned long)age_s, (age_s > 300) ? " (EXPIRED)" : "");
+    }
+  }
+  Serial.println("--------------------------------\n");
+}
+
 // ============================================================
 //  QoS — Stop-and-Wait ARQ (ACK & Retries)
 // ============================================================
@@ -269,12 +284,28 @@ static bool waitBusy(uint32_t timeoutMs = 100) {
 }
 
 static void hardResetRadio() {
-  Serial.println("[LORA] Hardware reset SX1262...");
+  Serial.println("[WARN] SX1262 hardware reset...");
   digitalWrite(LORA_RST_PIN, LOW);
   delay(20);
   digitalWrite(LORA_RST_PIN, HIGH);
   delay(50);
   waitBusy(200);
+}
+
+static bool reinitRadio() {
+  hardResetRadio();
+  int16_t state = radio.begin(LORA_FREQUENCY, LORA_BANDWIDTH, LORA_SPREADING_FACTOR, LORA_CODING_RATE,
+                              RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER, LORA_PREAMBLE_LEN,
+                              LORA_TCXO_VOLTAGE, false);
+  if (state != RADIOLIB_ERR_NONE) {
+    float alt_tcxo = (LORA_TCXO_VOLTAGE > 0.0) ? 0.0 : 1.8;
+    state = radio.begin(LORA_FREQUENCY, LORA_BANDWIDTH, LORA_SPREADING_FACTOR, LORA_CODING_RATE,
+                        RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER, LORA_PREAMBLE_LEN,
+                        alt_tcxo, false);
+  }
+  radio.setDio2AsRfSwitch(true);
+  radio.setDio1Action(onDio1Interrupt);
+  return (state == RADIOLIB_ERR_NONE);
 }
 
 static void enterReceiveMode() {
@@ -284,7 +315,7 @@ static void enterReceiveMode() {
   // Bật chế độ thu chu kỳ tiết kiệm điện động (Dynamic RXPS)
   state = radio.startReceiveDutyCycle(g_rxps_rx_us, g_rxps_sleep_us);
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[LORA] startReceiveDutyCycle err: %d — fallback to continuous RX\n", state);
+    Serial.printf("[ERR] RX duty cycle fail: %d -> fallback continuous RX\n", state);
     state = radio.startReceive();
   }
 #else
@@ -292,12 +323,8 @@ static void enterReceiveMode() {
 #endif
 
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[LORA] startReceive FAILED: %d — attempting recovery...\n", state);
-    hardResetRadio();
-    radio.begin(LORA_FREQUENCY, LORA_BANDWIDTH, LORA_SPREADING_FACTOR, LORA_CODING_RATE,
-                RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER, LORA_PREAMBLE_LEN,
-                LORA_TCXO_VOLTAGE, false);
-    radio.setDio2AsRfSwitch(true);
+    Serial.printf("[ERR] startReceive fail: %d -> attempting recovery\n", state);
+    reinitRadio();
 
 #if LORA_RX_DUTY_CYCLE_ENABLED
     state = radio.startReceiveDutyCycle(g_rxps_rx_us, g_rxps_sleep_us);
@@ -309,11 +336,66 @@ static void enterReceiveMode() {
 #endif
 
     if (state != RADIOLIB_ERR_NONE) {
-      Serial.printf("[LORA] Recovery startReceive ALSO FAILED: %d\n", state);
+      Serial.printf("[ERR] Recovery fail: %d\n", state);
     } else {
-      Serial.println("[LORA] Recovery OK — back in RX mode");
+      Serial.println("[SYS] Recovery OK -> RX mode restored");
     }
   }
+}
+
+// ============================================================
+//  RX Watchdog (RXPS Watchdog — MeshCore style)
+// ============================================================
+static void checkRxWatchdog() {
+#if LORA_RX_WATCHDOG_ENABLED
+  // Kiểm tra sức khỏe radio định kỳ mỗi 5 giây
+  static unsigned long lastWdCheck = 0;
+  if (millis() - lastWdCheck < 5000) return;
+  lastWdCheck = millis();
+
+  if (last_rx_activity_ms == 0) {
+    last_rx_activity_ms = millis();
+    return;
+  }
+
+  // 1. Kiểm tra kẹt phần cứng: Chân BUSY ở mức HIGH liên tục
+  if (digitalRead(LORA_BUSY_PIN) == HIGH) {
+    unsigned long waitBusyStart = millis();
+    while (digitalRead(LORA_BUSY_PIN) == HIGH && (millis() - waitBusyStart < 50)) {
+      delay(2);
+    }
+    if (digitalRead(LORA_BUSY_PIN) == HIGH) {
+      stats_rx_wd_resets++;
+      Serial.printf("[WD] BUSY stuck HIGH! Hard reset SX1262 (Resets: %lu)\n",
+                    (unsigned long)stats_rx_wd_resets);
+      reinitRadio();
+      enterReceiveMode();
+      last_rx_activity_ms = millis();
+      return;
+    }
+  }
+
+  // 2. Kiểm tra giao tiếp SPI & thanh ghi IRQ
+  uint16_t irq = radio.getIrqStatus();
+  if (irq == 0xFFFF) {
+    stats_rx_wd_resets++;
+    Serial.printf("[WD] Radio unresponsive (IRQ=0xFFFF)! Hard reset (Resets: %lu)\n",
+                  (unsigned long)stats_rx_wd_resets);
+    reinitRadio();
+    enterReceiveMode();
+    last_rx_activity_ms = millis();
+    return;
+  }
+
+  // 3. Chu kỳ im lặng quá lâu (Silent watchdog / RXPS timer refresh)
+  if (millis() - last_rx_activity_ms >= LORA_RX_WATCHDOG_TIMEOUT_MS) {
+    last_rx_activity_ms = millis();
+    enterReceiveMode();
+#if LORA_RX_DUTY_CYCLE_ENABLED
+    Serial.println("[WD] Periodic RXPS refresh — duty cycle resynced");
+#endif
+  }
+#endif
 }
 
 // ============================================================
@@ -337,12 +419,12 @@ static void waitChannelFreeWithCAD() {
   while (retries < LORA_CAD_MAX_RETRIES && lora_mesh_isChannelActive()) {
     retries++;
     uint32_t backoff = random(40, 120);
-    Serial.printf("[LORA] CAD: Kênh bận! Backoff %lums (thử %d/%d)...\n",
-                  backoff, retries, LORA_CAD_MAX_RETRIES);
+    Serial.printf("[CAD] Channel busy, backoff %lums (%d/%d)\n",
+                  (unsigned long)backoff, retries, LORA_CAD_MAX_RETRIES);
     delay(backoff);
   }
   if (retries >= LORA_CAD_MAX_RETRIES) {
-    Serial.println("[LORA] CAD: Kênh vẫn bận sau max retries, buộc phải phát...");
+    Serial.println("[CAD] Channel busy after max retries -> forcing transmit");
   }
 #endif
 }
@@ -363,11 +445,12 @@ static int executeTransmit(MeshPacket &pkt) {
   int16_t state = radio.transmit((uint8_t*)&pkt, txLen);
   
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[LORA] transmit() err: %d\n", state);
+    Serial.printf("[ERR] LoRa TX fail: %d\n", state);
   }
   
   // Luôn luôn quay về chế độ RX — kể cả khi TX lỗi
   enterReceiveMode();
+  last_rx_activity_ms = millis();
   return state;
 }
 
@@ -385,7 +468,7 @@ static bool relayPacket(MeshPacket &pkt) {
   if (state == RADIOLIB_ERR_NONE) {
     return true;
   } else {
-    Serial.printf("[LORA] Relay TX error: %d\n", state);
+    Serial.printf("[ERR] Relay TX fail: %d\n", state);
     return false;
   }
 }
@@ -402,11 +485,20 @@ static void sendAckPacket(uint8_t dest_id, uint16_t ack_msg_id) {
   ackPkt.flags = PKT_FLAG_IS_ACK;
   ackPkt.src_id = MY_NODE_ID;
   ackPkt.dest_id = dest_id;
+#if LORA_UNICAST_ROUTING_ENABLED
+  ackPkt.next_hop = findNextHop(dest_id);
+#else
+  ackPkt.next_hop = BROADCAST_ID;
+#endif
   ackPkt.sender_id = MY_NODE_ID;
   ackPkt.hop_count = 0;
   ackPkt.payload_len = 0;
 
-  Serial.printf("[LORA] QoS: Đang gửi ACK cho msg #%d tới Node %d...\n", ack_msg_id, dest_id);
+  if (ackPkt.next_hop != BROADCAST_ID) {
+    Serial.printf("[TX] ACK #%u -> Node %u (NextHop:%u)\n", ack_msg_id, dest_id, ackPkt.next_hop);
+  } else {
+    Serial.printf("[TX] ACK #%u -> Node %u (Flood)\n", ack_msg_id, dest_id);
+  }
   executeTransmit(ackPkt);
 }
 
@@ -428,27 +520,26 @@ static void processIncomingPacket() {
   float rssi = radio.getRSSI();
   float snr = radio.getSNR();
 
+  last_rx_activity_ms = millis();
   enterReceiveMode();
 
   if (state != RADIOLIB_ERR_NONE) {
     if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-      Serial.println("[LORA] RX Dropped: CRC Mismatch (Nhiễu hoặc sai format)");
+      Serial.println("[DROP] CRC mismatch (noise / corrupted)");
     } else {
-      Serial.printf("[LORA] readData error: %d\n", state);
+      Serial.printf("[ERR] Radio read fail: %d\n", state);
     }
     return;
   }
 
   // 1. Kiểm tra kích thước gói tối thiểu và Magic byte
   if (rxLen > 0 && rxLen < MESH_HEADER_SIZE) {
-    Serial.printf("[LORA] RX Dropped: Packet too short (%d bytes < header %d bytes)\n",
-                  (int)rxLen, (int)MESH_HEADER_SIZE);
+    Serial.printf("[DROP] Short packet (%d < %d bytes)\n", (int)rxLen, (int)MESH_HEADER_SIZE);
     return;
   }
 
   if (pkt.magic != MESH_MAGIC) {
-    Serial.printf("[LORA] RX Dropped: Invalid magic 0x%02X (Expected 0x%02X)\n",
-                  pkt.magic, MESH_MAGIC);
+    Serial.printf("[DROP] Invalid magic 0x%02X (exp: 0x%02X)\n", pkt.magic, MESH_MAGIC);
     return;
   }
 
@@ -488,30 +579,40 @@ static void processIncomingPacket() {
     typeStr = "PING";
   }
 
-  Serial.printf(
-      "[LORA] RX %s #%d from Node:%d via:%d | RSSI:%.1f SNR:%.1f | Flags:0x%02X | Path:%s\n",
-      typeStr, pkt.msg_id, pkt.src_id, pkt.sender_id, rssi, snr, pkt.flags,
-      formatPath(pkt).c_str());
-
-  // Hiển thị nội dung gói tin (hỗ trợ cả nhị phân và văn bản)
+  char payloadInfo[64] = {0};
   if (pkt.flags & PKT_FLAG_BINARY) {
     if (pkt.payload_len >= sizeof(SosBinaryPayload)) {
       SosBinaryPayload* bin = (SosBinaryPayload*)pkt.payload;
       if (bin->alert_type == ALERT_HEARTBEAT) {
-        Serial.printf("[LORA] >> HEARTBEAT TELEMETRY từ Node %d: Pin=%dmV\n",
-                      pkt.src_id, bin->battery_mv);
+        typeStr = "HEARTBEAT";
+        snprintf(payloadInfo, sizeof(payloadInfo), "Batt:%.2fV", bin->battery_mv / 1000.0f);
       } else {
-        const char* alertName = (bin->alert_type == ALERT_BAWL) ? "BAWL" : "ALERT";
-        const char* dirName = (bin->direction == DIR_LEFT) ? "LEFT" :
-                              (bin->direction == DIR_RIGHT) ? "RIGHT" : "CENTER";
-        Serial.printf("[LORA] >> SOS BINARY: Loại=%s (%d%%) | Hướng=%s | Pin=%dmV\n",
-                      alertName, bin->confidence, dirName, bin->battery_mv);
+        const char* alertName = (bin->alert_type == ALERT_BAWL) ? "BAWL" : 
+                                (bin->alert_type == ALERT_TEST) ? "TEST" : "ALERT";
+        const char* dirName = (bin->direction == DIR_LEFT) ? "L" :
+                              (bin->direction == DIR_RIGHT) ? "R" : "C";
+        snprintf(payloadInfo, sizeof(payloadInfo), "%s %d%% [%s] | Batt:%.2fV",
+                 alertName, bin->confidence, dirName, bin->battery_mv / 1000.0f);
       }
     }
+  } else if (pkt.msg_type == PKT_TYPE_ACK) {
+    snprintf(payloadInfo, sizeof(payloadInfo), "ACK-OK");
+  } else if (pkt.payload_len > 0) {
+    snprintf(payloadInfo, sizeof(payloadInfo), "\"%.32s\"", pkt.payload);
+  }
+
+  if (pkt.next_hop != BROADCAST_ID) {
+    Serial.printf(
+        "[RX] %s #%u | Src:%u->Dest:%u (NextHop:%u, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
+        typeStr, pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.next_hop, pkt.sender_id, pkt.hop_count,
+        rssi, snr, payloadInfo[0] ? payloadInfo : "none",
+        formatPath(pkt).c_str());
   } else {
-    if (pkt.payload_len > 0) {
-      Serial.printf("[LORA] >> Payload: %s\n", pkt.payload);
-    }
+    Serial.printf(
+        "[RX] %s #%u | Src:%u->Dest:%u (Flood, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
+        typeStr, pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.sender_id, pkt.hop_count,
+        rssi, snr, payloadInfo[0] ? payloadInfo : "none",
+        formatPath(pkt).c_str());
   }
 
   // 5. QoS: Xử lý khi nhận được gói ACK phản hồi
@@ -519,8 +620,8 @@ static void processIncomingPacket() {
     if (g_pending_ack.active && g_pending_ack.pkt.msg_id == pkt.msg_id) {
       uint32_t rtt = millis() - g_pending_ack.sent_at;
       g_pending_ack.active = false;
-      Serial.printf("[LORA] QoS: ✓ ACK CONFIRMED cho msg #%d từ Node %d (0x%02X)! (RTT: %lums)\n",
-                    pkt.msg_id, pkt.src_id, pkt.src_id, (unsigned long)rtt);
+      Serial.printf("[QoS] ✓ ACK CONFIRMED for msg #%u from Node %u (RTT: %lums)\n",
+                    pkt.msg_id, pkt.src_id, (unsigned long)rtt);
     }
     // Gói ACK đã tới đích cuối thì không relay tiếp
     if (pkt.dest_id == MY_NODE_ID) return;
@@ -538,34 +639,58 @@ static void processIncomingPacket() {
     return;
   }
 
+#if LORA_UNICAST_ROUTING_ENABLED
+  // 6.5. Unicast Next-Hop Filtering:
+  // Nếu gói tin chỉ định next_hop cụ thể khác BROADCAST_ID, và ta không phải next_hop đó
+  // thì BỎ QUA không relay để tránh bão mạng và tiết kiệm pin toàn mạng!
+  if (pkt.dest_id != BROADCAST_ID && pkt.next_hop != BROADCAST_ID) {
+    if (pkt.next_hop != MY_NODE_ID) {
+      Serial.printf("[SKIP] %s #%u: Unicast targeted to NextHop %u (self is %u)\n",
+                    typeStr, pkt.msg_id, pkt.next_hop, MY_NODE_ID);
+      return;
+    }
+  }
+#endif
+
   // 7. Hop Limit — Giới hạn số hop (chống flood bão mạng)
   if (pkt.hop_count >= 7) {
-    Serial.printf("[LORA] Dropped: Hop limit reached (%d hops)\n", pkt.hop_count);
+    Serial.printf("[DROP] %s #%u: Hop limit reached (%d hops)\n", typeStr, pkt.msg_id, pkt.hop_count);
     return;
   }
 
   // 8. Loop prevention — chống vòng lặp kín
   for (int i = 0; i < pkt.hop_count && i < MAX_PATH_LEN; i++) {
     if (pkt.path[i] == MY_NODE_ID) {
-      Serial.printf("[LORA] Dropped: loop detected (my ID in path)\n");
+      Serial.printf("[DROP] %s #%u: Loop detected (self in path)\n", typeStr, pkt.msg_id);
       return;
     }
   }
 
-  // 9. Cập nhật path + hop
+  // 9. Cập nhật path + hop + next_hop
   if (pkt.hop_count < MAX_PATH_LEN) {
     pkt.path[pkt.hop_count] = MY_NODE_ID;
   }
   pkt.hop_count++;
   pkt.sender_id = MY_NODE_ID;
 
-  // 10. Relay
-  Serial.printf("[LORA] Relaying %s #%d (hop %d)\n", typeStr, pkt.msg_id,
-                pkt.hop_count);
+#if LORA_UNICAST_ROUTING_ENABLED
+  pkt.next_hop = (pkt.dest_id == BROADCAST_ID) ? BROADCAST_ID : findNextHop(pkt.dest_id);
+#else
+  pkt.next_hop = BROADCAST_ID;
+#endif
 
+  // 10. Relay
   if (relayPacket(pkt)) {
     stats_relayed++;
-    Serial.printf("[LORA] Relay OK!\n");
+    if (pkt.next_hop != BROADCAST_ID) {
+      Serial.printf("[RELAY] %s #%u (Unicast -> NextHop:%u) -> Hop %u OK (Path:%s)\n",
+                    typeStr, pkt.msg_id, pkt.next_hop, pkt.hop_count, formatPath(pkt).c_str());
+    } else {
+      Serial.printf("[RELAY] %s #%u (Flood) -> Hop %u OK (Path:%s)\n",
+                    typeStr, pkt.msg_id, pkt.hop_count, formatPath(pkt).c_str());
+    }
+  } else {
+    Serial.printf("[RELAY] %s #%u -> Hop %u FAILED\n", typeStr, pkt.msg_id, pkt.hop_count);
   }
 }
 
@@ -575,7 +700,7 @@ static void processIncomingPacket() {
 static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *payload,
                                uint8_t payloadLen, uint8_t destId, bool requireAck) {
   if (loraMutex && xSemaphoreTake(loraMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-    Serial.println("[LORA] TX FAILED: Could not take mutex (Radio busy)");
+    Serial.println("[ERR] TX fail: Radio busy (mutex timeout)");
     return false;
   }
 
@@ -588,6 +713,11 @@ static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *paylo
   pkt.flags = flags;
   pkt.src_id = MY_NODE_ID;
   pkt.dest_id = destId;
+#if LORA_UNICAST_ROUTING_ENABLED
+  pkt.next_hop = (destId == BROADCAST_ID) ? BROADCAST_ID : findNextHop(destId);
+#else
+  pkt.next_hop = BROADCAST_ID;
+#endif
   pkt.sender_id = MY_NODE_ID;
   pkt.hop_count = 0;
   memset(pkt.path, 0, sizeof(pkt.path));
@@ -601,9 +731,27 @@ static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *paylo
   // Đánh dấu gói chính mình gửi vào seen cache (tránh relay lại)
   markPacketSeen(pkt.src_id, pkt.msg_id);
 
-  const char *typeStr = (msgType == PKT_TYPE_SOS) ? "SOS" : "DATA";
-  Serial.printf("[LORA] TX %s #%d → dest:%d (flags:0x%02X, len:%d)\n",
-                typeStr, pkt.msg_id, destId, flags, pkt.payload_len);
+  const char *typeStr = (msgType == PKT_TYPE_SOS) ? "SOS" :
+                        (msgType == PKT_TYPE_ACK) ? "ACK" : "DATA";
+  char payloadSummary[48] = {0};
+  if (flags & PKT_FLAG_BINARY) {
+    if (payloadLen >= sizeof(SosBinaryPayload)) {
+      SosBinaryPayload* bin = (SosBinaryPayload*)payload;
+      if (bin->alert_type == ALERT_HEARTBEAT) {
+        typeStr = "HEARTBEAT";
+        snprintf(payloadSummary, sizeof(payloadSummary), "Batt:%.2fV", bin->battery_mv / 1000.0f);
+      } else {
+        const char* alertName = (bin->alert_type == ALERT_BAWL) ? "BAWL" : 
+                                (bin->alert_type == ALERT_TEST) ? "TEST" : "ALERT";
+        const char* dirName = (bin->direction == DIR_LEFT) ? "L" :
+                              (bin->direction == DIR_RIGHT) ? "R" : "C";
+        snprintf(payloadSummary, sizeof(payloadSummary), "%s %d%% [%s] | Batt:%.2fV",
+                 alertName, bin->confidence, dirName, bin->battery_mv / 1000.0f);
+      }
+    }
+  } else if (payloadLen > 0) {
+    snprintf(payloadSummary, sizeof(payloadSummary), "\"%.20s\"", payload);
+  }
 
   // Đăng ký vào hàng đợi QoS nếu yêu cầu ACK
   if (requireAck) {
@@ -617,13 +765,22 @@ static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *paylo
   int state = executeTransmit(pkt);
 
   if (state == RADIOLIB_ERR_NONE) {
-    Serial.printf("[LORA] TX %s #%d OK!\n", typeStr, pkt.msg_id);
-    if (msgType == PKT_TYPE_SOS)
-      stats_tx_sos++;
+    if (msgType == PKT_TYPE_SOS) stats_tx_sos++;
+    if (pkt.next_hop != BROADCAST_ID) {
+      Serial.printf("[TX] %s #%u -> Dest:%u (NextHop:%u%s) | %s | OK\n",
+                    typeStr, pkt.msg_id, destId, pkt.next_hop,
+                    requireAck ? ", wait ACK" : "",
+                    payloadSummary[0] ? payloadSummary : "len:0");
+    } else {
+      Serial.printf("[TX] %s #%u -> Dest:%u (Flood%s) | %s | OK\n",
+                    typeStr, pkt.msg_id, destId,
+                    requireAck ? ", wait ACK" : "",
+                    payloadSummary[0] ? payloadSummary : "len:0");
+    }
     if (loraMutex) xSemaphoreGive(loraMutex);
     return true;
   } else {
-    Serial.printf("[LORA] TX %s FAILED: %d\n", typeStr, state);
+    Serial.printf("[TX] %s #%u -> Dest:%u FAILED (%d)\n", typeStr, pkt.msg_id, destId, state);
     if (requireAck) g_pending_ack.active = false;
     if (loraMutex) xSemaphoreGive(loraMutex);
     return false;
@@ -657,7 +814,6 @@ bool lora_mesh_sendHeartbeat(bool requireAck) {
   uint8_t flags = PKT_FLAG_BINARY;
   if (requireAck) flags |= PKT_FLAG_ACK_REQ;
 
-  Serial.printf("[LORA] Periodic Telemetry Heartbeat: %dmV (ACK=%d)\n", bin.battery_mv, requireAck);
   return sendPacketInternal(PKT_TYPE_DATA, flags, (const char*)&bin, sizeof(bin), GATEWAY_ID, requireAck);
 }
 
@@ -667,15 +823,7 @@ bool lora_mesh_sendSOS(const char *payload, uint8_t payloadLen, bool requireAck)
   return sendPacketInternal(PKT_TYPE_SOS, flags, payload, payloadLen, GATEWAY_ID, requireAck);
 }
 
-bool lora_mesh_sendData(const char *payload, uint8_t payloadLen, uint8_t destId, bool requireAck) {
-  uint8_t flags = PKT_FLAG_NONE;
-  if (requireAck) flags |= PKT_FLAG_ACK_REQ;
-  return sendPacketInternal(PKT_TYPE_DATA, flags, payload, payloadLen, destId, requireAck);
-}
-
 bool lora_mesh_init() {
-  Serial.println("[LORA] Initializing SX1262...");
-
   if (!loraMutex) {
     loraMutex = xSemaphoreCreateMutex();
   }
@@ -716,8 +864,6 @@ bool lora_mesh_init() {
 #endif
 
   // SPI init — LoRa chiếm SPI2 với pin riêng
-  Serial.printf("[LORA] SPI pins: SCK=%d, MISO=%d, MOSI=%d, CS=%d\n",
-                LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN, LORA_CS_PIN);
   LoRaSPI.begin(LORA_SCK_PIN, LORA_MISO_PIN, LORA_MOSI_PIN,
                 -1); // -1: RadioLib quản lý CS
   pinMode(LORA_BUSY_PIN, INPUT);
@@ -741,14 +887,13 @@ bool lora_mesh_init() {
 
   if (state != RADIOLIB_ERR_NONE) {
     float alt_tcxo = (LORA_TCXO_VOLTAGE > 0.0) ? 0.0 : 1.8;
-    Serial.printf("[LORA] Retry with TCXO=%.1fV (err=%d)\n", alt_tcxo, state);
     state = radio.begin(LORA_FREQUENCY, LORA_BANDWIDTH, LORA_SPREADING_FACTOR, LORA_CODING_RATE,
                         RADIOLIB_SX126X_SYNC_WORD_PRIVATE, LORA_TX_POWER, LORA_PREAMBLE_LEN,
                         alt_tcxo, false);
   }
 
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[LORA] INIT FAILED: %d\n", state);
+    Serial.printf("[ERR] SX1262 init failed: %d\n", state);
     return false;
   }
 
@@ -763,20 +908,6 @@ bool lora_mesh_init() {
   enterReceiveMode();
 
   randomSeed(esp_random());
-
-  Serial.printf(
-      "[LORA] SX1262 ready! MAC=%s | Node ID=%d (0x%02X) | %.1fMHz, SF%d, BW%.0f, +%ddBm, Preamble=%d\n",
-      lora_mesh_getMacString(), MY_NODE_ID, MY_NODE_ID, LORA_FREQUENCY, LORA_SPREADING_FACTOR, LORA_BANDWIDTH, LORA_TX_POWER, LORA_PREAMBLE_LEN);
-#if LORA_RX_DUTY_CYCLE_ENABLED
-  Serial.printf("[LORA] Dynamic RXPS: ON (Level %d: RX %luus, Sleep %luus)\n",
-                LORA_RXPS_LEVEL, (unsigned long)g_rxps_rx_us, (unsigned long)g_rxps_sleep_us);
-#else
-  Serial.println("[LORA] Dynamic RXPS: OFF (Continuous RX)");
-#endif
-#if LORA_CAD_ENABLED
-  Serial.println("[LORA] CAD Collision Avoidance: ON");
-#endif
-  Serial.printf("[LORA] Battery Voltage: %dmV\n", lora_mesh_getBatteryMilliVolts());
   return true;
 }
 
@@ -810,32 +941,43 @@ void lora_mesh_loop() {
         g_pending_ack.retries_left--;
         g_pending_ack.sent_at = millis();
         g_pending_ack.pkt.sender_id = MY_NODE_ID;
-        Serial.printf("[LORA] QoS: ACK Timeout! Retransmitting msg #%d (còn %d lần thử)...\n",
+        Serial.printf("[QoS] ACK Timeout msg #%u -> Retrying (%d retries left)...\n",
                       g_pending_ack.pkt.msg_id, g_pending_ack.retries_left);
         executeTransmit(g_pending_ack.pkt);
       } else {
-        Serial.printf("[LORA] QoS: Hết số lần thử! Không nhận được ACK cho msg #%d!\n",
+        Serial.printf("[QoS] FAIL: No ACK received for msg #%u!\n",
                       g_pending_ack.pkt.msg_id);
         g_pending_ack.active = false;
       }
     }
   }
 
-  // 3. Giám sát pin định kỳ mỗi 60 giây
+  // 3. RX Watchdog (RXPS Watchdog): Giám sát phần cứng và duy trì chế độ nhận
+  checkRxWatchdog();
+
+  // 4. Giám sát pin định kỳ mỗi 60 giây
   static unsigned long lastBatteryCheck = 0;
   if (millis() - lastBatteryCheck >= 60000) {
     lastBatteryCheck = millis();
     lora_mesh_checkBatteryProtection();
   }
 
-  // 4. Heartbeat log mỗi 30 giây
+  // 5. Heartbeat log mỗi 30 giây
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat >= 30000) {
     lastHeartbeat = millis();
+    uint32_t sec = millis() / 1000;
+    uint32_t h = sec / 3600;
+    uint32_t m = (sec / 60) % 60;
+    uint32_t s = sec % 60;
     Serial.printf(
-        "[LORA] Alive | Up:%lus | RX:%lu Relayed:%lu SOS_TX:%lu Dup:%lu | Batt:%dmV | Routes:%d\n",
-        millis() / 1000, stats_rx_total, stats_relayed, stats_tx_sos,
-        stats_dropped_seen, lora_mesh_getBatteryMilliVolts(), route_count);
+        "[STATUS] Up %02lu:%02lu:%02lu | Batt:%.2fV | RX:%lu Relay:%lu TX:%lu Dup:%lu | Routes:%u | WD:%lu | Heap:%luKB\n",
+        (unsigned long)h, (unsigned long)m, (unsigned long)s,
+        lora_mesh_getBatteryMilliVolts() / 1000.0f,
+        (unsigned long)stats_rx_total, (unsigned long)stats_relayed, (unsigned long)stats_tx_sos,
+        (unsigned long)stats_dropped_seen, (unsigned int)route_count,
+        (unsigned long)stats_rx_wd_resets,
+        (unsigned long)(ESP.getFreeHeap() / 1024));
   }
 
   xSemaphoreGive(loraMutex);
@@ -849,6 +991,19 @@ bool lora_mesh_light_sleep(uint32_t timeoutMs) {
   // Không ngủ nếu có gói tin đang chờ hoặc chân DIO1 đang báo mức cao
   if (rx_packet_ready || digitalRead(LORA_DIO1_PIN) == HIGH) {
     return false;
+  }
+
+  // Không ngủ dài nếu đang đợi xác nhận gói tin (QoS ACK)
+  if (g_pending_ack.active) {
+    uint32_t elapsed = millis() - g_pending_ack.sent_at;
+    if (elapsed < g_pending_ack.timeout_ms) {
+      uint32_t remaining = g_pending_ack.timeout_ms - elapsed;
+      if (timeoutMs == 0 || remaining < timeoutMs) {
+        timeoutMs = remaining;
+      }
+    } else {
+      return false; // Đã quá hạn ACK, để loop() xử lý retransmit ngay lập tức
+    }
   }
 
   // 1. Chờ xuất hết dữ liệu Serial trước khi ngủ để tránh rác ký tự do ngắt xung nhịp

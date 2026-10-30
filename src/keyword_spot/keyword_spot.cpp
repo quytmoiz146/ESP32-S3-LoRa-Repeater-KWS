@@ -69,19 +69,9 @@ void keywordSpot_init() {
     return;
   }
 
-  Serial.printf("[KWS] Init OK — window=%dms (%d samples), margin_thr=%.2f, min_dur=%dms\n",
-                KWS_WINDOW_SIZE_MS, KWS_WINDOW_SAMPLES,
-                KWS_MARGIN_THRESHOLD, KWS_MIN_DURATION_MS);
-  Serial.printf("[KWS] EI Model: %s, labels=%d, DSP input=%d, NN input=%d\n",
-                EI_CLASSIFIER_PROJECT_NAME,
-                EI_CLASSIFIER_LABEL_COUNT,
-                EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE,
-                EI_CLASSIFIER_NN_INPUT_FRAME_SIZE);
-  Serial.printf("[KWS] Labels:");
-  for (size_t i = 0; i < EI_CLASSIFIER_LABEL_COUNT; i++) {
-    Serial.printf(" [%d]=%s", (int)i, ei_classifier_inferencing_categories[i]);
-  }
-  Serial.println();
+  Serial.printf("[KWS] Model: %s (%d labels, window %dms, margin thr %.2f)\n",
+                EI_CLASSIFIER_PROJECT_NAME, EI_CLASSIFIER_LABEL_COUNT,
+                KWS_WINDOW_SIZE_MS, KWS_MARGIN_THRESHOLD);
 }
 
 // ============================================================
@@ -244,7 +234,7 @@ static void saveDetectionWav(const int16_t* audioBuffer, size_t sampleCount,
   wavFile.write((const uint8_t*)audioBuffer, dataSize);
   wavFile.close();
 
-  Serial.printf("[KWS] Saved %s (%s %.1f%%)\n",
+  Serial.printf("[SD] Saved %s (%s %.0f%%)\n",
                 filename, result.label, result.score * 100.0f);
   detectionFileIndex++;
 }
@@ -263,19 +253,9 @@ static void saveDetectionWav(const int16_t* audioBuffer, size_t sampleCount,
 enum DetectState { DETECT_IDLE, DETECT_CANDIDATE };
 
 void taskKeywordSpot(void* pvParameters) {
-  Serial.printf("[KWS_TASK] Started on Core %d\n", xPortGetCoreID());
-  Serial.printf("[KWS_TASK] Sliding Window: %dms window, %dms stride (%.0f%% overlap)\n",
-                KWS_WINDOW_SIZE_MS, KWS_SLIDE_MS,
-                (1.0f - (float)KWS_SLIDE_MS / KWS_WINDOW_SIZE_MS) * 100.0f);
-  Serial.printf("[KWS_TASK] Detection: margin_thr=%.2f, MA_window=%d, "
-                "min_dur=%dms, cooldown=%dms\n",
-                KWS_MARGIN_THRESHOLD, KWS_MA_WINDOW_N,
-                KWS_MIN_DURATION_MS, KWS_COOLDOWN_MS);
-
   while (true) {
     // 1. Ngủ chờ — tốn 0% CPU cho đến khi VAD đánh thức
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
-    Serial.println("[KWS_TASK] Woken by VAD — starting inference loop");
 
     // --- Reset state mỗi lần VAD gate mở ---
     DetectState detectState = DETECT_IDLE;
@@ -360,38 +340,26 @@ void taskKeywordSpot(void* pvParameters) {
       }
 
       // --- Log ---
-      Serial.printf("[KWS_TASK] b=%.0f%% n=%.0f%% s=%.0f%% | margin=%.2f | %lums | %s",
+      Serial.printf("[KWS] b:%.0f%% n:%.0f%% s:%.0f%% | margin:%.2f (%lums) [%s]\n",
                     bawlScore * 100.0f, noiseScore * 100.0f, speechScore * 100.0f,
                     margin,
                     (unsigned long)result.inferenceMs,
                     stateStr);
-      if (detectState == DETECT_CANDIDATE) {
-        Serial.printf(" (%lums/%dms)", (unsigned long)candidateDurMs, KWS_MIN_DURATION_MS);
-      }
-      Serial.println();
 
       // --- Trigger khi CONFIRMED ---
       if (strcmp(stateStr, "CONFIRMED") == 0) {
-        Serial.printf("[KWS_TASK] *** CONFIRMED: %s (%.1f%%) — margin=%.2f, "
-                      "duration=%lums ***\n",
-                      result.label, result.score * 100.0f,
-                      margin, (unsigned long)candidateDurMs);
-
-        // Báo hướng âm thanh từ dual mic
         StereoAnalysis sa = stereo_getLastAnalysis();
+        const char *direction = "CENTER";
         if (sa.rmsLeft > MIC_MIN_ENERGY_FOR_ILD ||
             sa.rmsRight > MIC_MIN_ENERGY_FOR_ILD) {
-          const char *direction;
           if (sa.ildDb > 2.0f) {
-            direction = "LEFT mic side";
+            direction = "LEFT";
           } else if (sa.ildDb < -2.0f) {
-            direction = "RIGHT mic side";
-          } else {
-            direction = "CENTER (equal)";
+            direction = "RIGHT";
           }
-          Serial.printf("[KWS_TASK] Direction: %s (ILD=%.1fdB, L=%.0f, R=%.0f)\n",
-                        direction, sa.ildDb, sa.rmsLeft, sa.rmsRight);
         }
+        Serial.printf("[ALERT] *** CONFIRMED: %s (%.0f%%) | Dir: %s (ILD:%.1fdB) | Alarm 7s ***\n",
+                      result.label, result.score * 100.0f, direction, sa.ildDb);
 
         // Ghi log vào CSV
         logDetectionCSV(result);
@@ -412,7 +380,7 @@ void taskKeywordSpot(void* pvParameters) {
         detectState = DETECT_IDLE;
         cooldownUntilMs = millis() + KWS_COOLDOWN_MS;
         g_alarm_end_ms = millis() + 7000; // Bật còi báo động 7s
-        Serial.printf("[KWS_TASK] Cooldown %dms, Alarm 7s\n", KWS_COOLDOWN_MS);
+        Serial.printf("[KWS] Cooldown %dms\n", KWS_COOLDOWN_MS);
 
         // --- Gửi SOS qua LoRa Mesh (Định dạng Nhị phân Siêu gọn + QoS ACK + Pin) ---
         {
@@ -429,7 +397,7 @@ void taskKeywordSpot(void* pvParameters) {
     }
 
     // 3. Gate tắt — quay lại ngủ
-    Serial.println("[KWS_TASK] VAD gate OFF — going back to sleep");
+    Serial.println("[KWS] VAD gate OFF — sleeping");
   }
 }
 
@@ -446,8 +414,6 @@ void keywordSpotTask_start() {
     &kwsTaskHandle,
     TASK_KWS_CORE
   );
-  Serial.printf("[KWS_TASK] Created — Core %d, Priority %d, Stack %d\n",
-                TASK_KWS_CORE, TASK_KWS_PRIORITY, TASK_KWS_STACK);
 }
 
 TaskHandle_t keywordSpotTask_getHandle() {

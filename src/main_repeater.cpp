@@ -4,7 +4,6 @@
 // ============================================================
 #include "config.h"
 #include <Arduino.h>
-#include <SPI.h>
 #include "lora_mesh/lora_mesh.h"
 
 volatile unsigned long g_alarm_end_ms = 0;
@@ -19,25 +18,35 @@ void setup() {
   Serial.begin(115200);
 
   unsigned long startWait = millis();
-  while (!Serial && (millis() - startWait < 3000)) {
+  while (!Serial && (millis() - startWait < 2000)) {
     delay(10);
   }
-  delay(500);
+  delay(200);
 
-  Serial.println("=========================================");
-  Serial.printf("  LORA REPEATER — ID=%d (0x%02X)\n", MY_NODE_ID, MY_NODE_ID);
-  Serial.printf("  eFuse MAC: %s\n", lora_mesh_getMacString());
-  Serial.println("  Relay-only mode (no KWS/Audio/SD)");
-  Serial.println("=========================================");
-
-  Serial.printf("[SYS] Free heap: %lu bytes\n",
-                (unsigned long)ESP.getFreeHeap());
-
-  if (lora_mesh_init()) {
-    Serial.println("[LORA] ✓ INIT SUCCESS!");
+  bool loraOk = lora_mesh_init();
+  if (loraOk) {
     digitalWrite(LED, HIGH);
+  }
+
+  Serial.println("\n==================================================================");
+  Serial.printf("  ESP32-S3 LORA REPEATER | Node ID: %d (0x%02X) | %s\n", 
+                MY_NODE_ID, MY_NODE_ID, loraOk ? "READY" : "INIT FAILED");
+  Serial.printf("  MAC: %s | RF: %.1fMHz SF%d BW%.0f +%ddBm\n",
+                lora_mesh_getMacString(), LORA_FREQUENCY, LORA_SPREADING_FACTOR,
+                LORA_BANDWIDTH, LORA_TX_POWER);
+  Serial.printf("  Batt: %.2fV | Heap: %luKB | CAD: %s | Dual Power Saving: %s (RXPS:%s, Sleep:%s)\n",
+                lora_mesh_getBatteryMilliVolts() / 1000.0f,
+                (unsigned long)(ESP.getFreeHeap() / 1024),
+                LORA_CAD_ENABLED ? "ON" : "OFF",
+                (LORA_RX_DUTY_CYCLE_ENABLED && LORA_LIGHT_SLEEP_ENABLED) ? "ON" : "OFF",
+                LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
+                LORA_LIGHT_SLEEP_ENABLED ? "ON" : "OFF");
+  Serial.println("  Commands: [t] SOS Gateway  [p] Ping Broadcast  [h] Heartbeat  [r] Routes  [w] Watchdog  [s] Power");
+  Serial.println("==================================================================");
+  if (loraOk) {
+    Serial.println("[SYS] Repeater active — listening for mesh packets...\n");
   } else {
-    Serial.println("[LORA] ✗ INIT FAILED!");
+    Serial.println("[ERR] LoRa hardware not responding — check SPI wiring!\n");
     for (int i = 0; i < 10; i++) {
       digitalWrite(LED, HIGH);
       delay(100);
@@ -45,14 +54,6 @@ void setup() {
       delay(100);
     }
   }
-
-  Serial.println("=========================================");
-  Serial.println("[SYS] Repeater running — listening...");
-  Serial.println("[SYS] Lenh Serial:");
-  Serial.println("  t = Gui TEST SOS toi Gateway (dest: 0, relay test)");
-  Serial.println("  p = Gui PING BROADCAST (kiem tra ACK 2 chieu tu cac node)");
-  Serial.println("  h = Gui TEST Heartbeat pin");
-  Serial.println("=========================================");
 }
 
 void loop() {
@@ -71,20 +72,30 @@ void loop() {
   if (Serial.available()) {
     char cmd = Serial.read();
     if (cmd == 't' || cmd == 'T') {
-      Serial.println("[SYS] Gửi TEST SOS BINARY tới Gateway (dest: 0)...");
+      Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
       g_alarm_end_ms = millis() + 7000;
       lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, GATEWAY_ID);
     } else if (cmd == 'p' || cmd == 'P') {
-      Serial.println("[SYS] Gửi PING BROADCAST tới toàn mạng với yêu cầu ACK...");
+      Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
       lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, BROADCAST_ID);
     } else if (cmd == 'h' || cmd == 'H') {
-      Serial.println("[SYS] Gửi TEST HEARTBEAT (Telemetry Pin)...");
+      Serial.println("[CMD] Test Heartbeat Telemetry...");
       lora_mesh_sendHeartbeat(false);
-    } else if (cmd == 'j' || cmd == 'J') {
-      Serial.println("[SYS] Gửi TEST SOS JSON cũ...");
-      g_alarm_end_ms = millis() + 7000;
-      const char* testPayload = "{\"type\":\"SOS\",\"target\":\"gateway\",\"label\":\"bawl\",\"score\":99.9,\"dir\":\"TEST_REP\"}";
-      lora_mesh_sendSOS(testPayload, strlen(testPayload), true /* requireAck */);
+    } else if (cmd == 'r' || cmd == 'R') {
+      Serial.println("[CMD] Mesh Routing Table:");
+      lora_mesh_printRoutingTable();
+    } else if (cmd == 'w' || cmd == 'W') {
+      Serial.printf("[CMD] RX Watchdog status: %s (Timeout: %lums) | Resets: %lu\n",
+                    LORA_RX_WATCHDOG_ENABLED ? "ACTIVE" : "DISABLED",
+                    (unsigned long)LORA_RX_WATCHDOG_TIMEOUT_MS,
+                    (unsigned long)lora_mesh_getWatchdogResets());
+    } else if (cmd == 's' || cmd == 'S') {
+      Serial.printf("[CMD] Power Saving: DUAL %s | RXPS (SX1262): %s (Level %d) | Light Sleep (MCU): %s (%dms)\n",
+                    (LORA_RX_DUTY_CYCLE_ENABLED && LORA_LIGHT_SLEEP_ENABLED) ? "ACTIVE" : "OFF",
+                    LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
+                    LORA_RXPS_LEVEL,
+                    LORA_LIGHT_SLEEP_ENABLED ? "ON" : "OFF",
+                    LORA_LIGHT_SLEEP_PERIOD_MS);
     }
   }
 

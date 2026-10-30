@@ -43,9 +43,6 @@ static bool sdReady = false;
 
 volatile unsigned long g_alarm_end_ms = 0;
 
-// Chế độ hoạt động: false = detection mode (FreeRTOS), true = recording mode
-static bool recordingMode = false;
-
 // ============================================================
 //  Khởi tạo I2S
 // ============================================================
@@ -353,15 +350,11 @@ bool recordWavFile() {
 // ============================================================
 //  Khởi tạo hệ thống detection (FreeRTOS tasks)
 // ============================================================
-void startDetectionSystem() {
-  Serial.println("=========================================");
-  Serial.println("  Starting 2-Tier Detection System");
-  Serial.println("=========================================");
-
+bool startDetectionSystem() {
   // 1. Khởi tạo Ring Buffer PSRAM
   if (!ringBuffer_init(RING_BUFFER_SIZE_SAMPLES)) {
-    Serial.println("[SYS] Ring buffer init FAILED — cannot start detection");
-    return;
+    Serial.println("[ERR] Ring buffer init FAILED — cannot start detection");
+    return false;
   }
 
   // 2. Khởi tạo Tier0 VAD
@@ -383,11 +376,8 @@ void startDetectionSystem() {
   keywordSpot_init();
 
   // 5. Tạo tasks theo chiều ngược luồng dữ liệu (đích trước, nguồn sau)
-  //    Đảm bảo task nhận notification đã tồn tại trước khi task gửi bắt đầu
-  //    chạy
   keywordSpotTask_start();
 
-  // Chờ KWS task handle sẵn sàng
   TaskHandle_t kwsHandle = keywordSpotTask_getHandle();
   while (kwsHandle == nullptr) {
     vTaskDelay(pdMS_TO_TICKS(10));
@@ -397,16 +387,11 @@ void startDetectionSystem() {
   i2sCaptureTask_start(kwsHandle);
 
   // 6. Khởi tạo LoRa Mesh (SX1262)
-  if (!lora_mesh_init()) {
-    Serial.println("[SYS] WARNING: LoRa mesh init FAILED — detection works, but no SOS transmission");
+  bool loraOk = lora_mesh_init();
+  if (!loraOk) {
+    Serial.println("[WARN] LoRa mesh init FAILED — audio detection active, LoRa offline");
   }
-
-  Serial.println("[SYS] Detection system started!");
-  Serial.println(
-      "[SYS] Dual Mic → Stereo → Downmix Mono → VAD → KWS → LoRa Mesh pipeline active");
-  Serial.printf("[SYS] Free heap: %lu bytes | Free PSRAM: %lu bytes\n",
-                (unsigned long)ESP.getFreeHeap(),
-                (unsigned long)ESP.getFreePsram());
+  return loraOk;
 }
 
 // ============================================================
@@ -421,19 +406,10 @@ void setup() {
 
   Serial.begin(115200);
   unsigned long startWait = millis();
-  while (!Serial && (millis() - startWait < 3000)) {
+  while (!Serial && (millis() - startWait < 2000)) {
     delay(10);
   }
-  delay(500);
-
-  Serial.println("=========================================");
-  Serial.printf("  LORA NODE FULL — ID=%d (0x%02X)\n", MY_NODE_ID, MY_NODE_ID);
-  Serial.printf("  eFuse MAC: %s\n", lora_mesh_getMacString());
-  Serial.println("  Dual Mic Stereo → Downmix Mono");
-  Serial.println("  Tier0: VAD Energy Gate");
-  Serial.println("  Tier1: KWS (Edge Impulse, int8)");
-  Serial.println("  16kHz / 16-bit / Stereo→Mono");
-  Serial.println("=========================================");
+  delay(200);
 
   // 1. Khởi tạo phần cứng
   i2s_init();
@@ -441,19 +417,26 @@ void setup() {
   initFromExistingFiles();
 
   // 2. Khởi tạo hệ thống detection (FreeRTOS tasks)
-  startDetectionSystem();
+  bool loraOk = startDetectionSystem();
+  if (loraOk) {
+    digitalWrite(LED, HIGH);
+  }
 
-  Serial.println("=========================================");
-  Serial.printf("[SYS] FIXED_GAIN = %.2f | Node ID = %d (0x%02X)\n", FIXED_GAIN, MY_NODE_ID, MY_NODE_ID);
-  Serial.println("[SYS] Lenh Serial:");
-  Serial.println("  t = Gui TEST SOS toi Gateway (dest: 0, relay test)");
-  Serial.println("  p = Gui PING BROADCAST (kiem tra ACK 2 chieu tu cac node)");
-  Serial.println("  h = Gui TEST Heartbeat Telemetry pin");
-  Serial.println("  r = Ghi 1 file WAV (dung detection, ghi xong chay lai)");
-  Serial.println("  c = Ghi lien tuc WAV (dung detection)");
-  Serial.println("  d = Bat lai detection (sau khi ghi xong)");
-  Serial.println("  q = Dung ghi lien tuc");
-  Serial.println("=========================================");
+  Serial.println("\n==================================================================");
+  Serial.printf("  ESP32-S3 NODE FULL | ID: %d (0x%02X) | %s\n",
+                MY_NODE_ID, MY_NODE_ID, loraOk ? "READY" : "LORA FAIL");
+  Serial.printf("  MAC: %s | RF: %.1fMHz SF%d BW%.0f +%ddBm\n",
+                lora_mesh_getMacString(), LORA_FREQUENCY, LORA_SPREADING_FACTOR,
+                LORA_BANDWIDTH, LORA_TX_POWER);
+  Serial.printf("  Audio: 16kHz Stereo Dual-Mic (Gain: %.1fx) | Tier0 VAD -> Tier1 KWS\n", FIXED_GAIN);
+  Serial.printf("  Batt: %.2fV | Heap: %luKB | PSRAM: %luKB | SD: %s\n",
+                lora_mesh_getBatteryMilliVolts() / 1000.0f,
+                (unsigned long)(ESP.getFreeHeap() / 1024),
+                (unsigned long)(ESP.getFreePsram() / 1024),
+                sdReady ? "Mounted" : "Fail");
+  Serial.println("  Commands: [t] SOS  [p] Ping  [h] Heartbeat  [m] Routes  [w] Watchdog  [s] Power  [r] Rec WAV");
+  Serial.println("==================================================================");
+  Serial.println("[SYS] Detection pipeline active — listening for audio events...\n");
 }
 // ============================================================
 //  Vòng lặp chính — xử lý lệnh Serial
@@ -515,12 +498,12 @@ void loop() {
     case 'Q':
       continuousMode = false;
       resumeDetection();
-      Serial.println("[SYS] Da dung ghi lien tuc");
+      Serial.println("[CMD] Stopped continuous recording");
       break;
     case 't':
     case 'T':
       {
-        Serial.println("[SYS] Gửi TEST SOS BINARY tới Gateway (dest: 0)...");
+        Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
         g_alarm_end_ms = millis() + 7000; // Test còi 7s
         lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, GATEWAY_ID);
       }
@@ -528,15 +511,39 @@ void loop() {
     case 'p':
     case 'P':
       {
-        Serial.println("[SYS] Gửi PING BROADCAST tới toàn mạng với yêu cầu ACK...");
+        Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
         lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, BROADCAST_ID);
       }
       break;
     case 'h':
     case 'H':
       {
-        Serial.println("[SYS] Gửi TEST HEARTBEAT (Telemetry Pin)...");
+        Serial.println("[CMD] Test Heartbeat Telemetry...");
         lora_mesh_sendHeartbeat(false);
+      }
+      break;
+    case 'm':
+    case 'M':
+      {
+        Serial.println("[CMD] Mesh Routing Table:");
+        lora_mesh_printRoutingTable();
+      }
+      break;
+    case 'w':
+    case 'W':
+      {
+        Serial.printf("[CMD] RX Watchdog status: %s (Timeout: %lums) | Resets: %lu\n",
+                      LORA_RX_WATCHDOG_ENABLED ? "ACTIVE" : "DISABLED",
+                      (unsigned long)LORA_RX_WATCHDOG_TIMEOUT_MS,
+                      (unsigned long)lora_mesh_getWatchdogResets());
+      }
+      break;
+    case 's':
+    case 'S':
+      {
+        Serial.printf("[CMD] Power Saving: SX1262 RXPS: %s (Level %d)\n",
+                      LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
+                      LORA_RXPS_LEVEL);
       }
       break;
     default:

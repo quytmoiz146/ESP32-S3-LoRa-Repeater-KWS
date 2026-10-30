@@ -36,10 +36,6 @@ void taskI2SCapture(void *pvParameters) {
 
   size_t bytesRead = 0;
 
-  Serial.printf("[I2S_TASK] Started on Core %d — reading %d frames/block "
-                "(stereo, %d int32 per read)\n",
-                xPortGetCoreID(), I2S_FRAMES_PER_READ, I2S_SAMPLES_PER_READ);
-
   while (true) {
     // Kiểm tra cờ pause TRƯỚC khi gọi i2s_read()
     // Nếu được yêu cầu dừng → báo hiệu đã dừng, rồi chờ đến khi resume
@@ -116,9 +112,6 @@ void i2sCaptureTask_start(TaskHandle_t keywordTaskHandle) {
     &captureTaskHandle,
     TASK_I2S_CAPTURE_CORE
   );
-  Serial.printf("[I2S_TASK] Created — Core %d, Priority %d, Stack %d\n",
-                TASK_I2S_CAPTURE_CORE, TASK_I2S_CAPTURE_PRIORITY,
-                TASK_I2S_CAPTURE_STACK);
 }
 
 void i2sCaptureTask_pause() {

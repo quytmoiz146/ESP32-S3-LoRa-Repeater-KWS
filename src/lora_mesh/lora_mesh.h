@@ -24,19 +24,15 @@
 //  Định dạng Nhị phân Siêu gọn cho Cảnh báo SOS (Chỉ 5 bytes!)
 // ============================================================
 enum AlertType : uint8_t {
-  ALERT_NONE      = 0, // Không có sự kiện
   ALERT_HEARTBEAT = 0, // Gói đo lường pin & nhịp tim định kỳ
   ALERT_BAWL      = 1, // Tiếng kêu cứu / la hét (KWS detected)
-  ALERT_SCREAM    = 2,
-  ALERT_HELP      = 3,
   ALERT_TEST      = 99
 };
 
 enum DirectionType : uint8_t {
   DIR_CENTER  = 0,
   DIR_LEFT    = 1,
-  DIR_RIGHT   = 2,
-  DIR_UNKNOWN = 3
+  DIR_RIGHT   = 2
 };
 
 #pragma pack(push, 1)
@@ -54,6 +50,7 @@ struct MeshPacket {
   uint8_t  flags;          // PKT_FLAG_* (ACK_REQ, IS_ACK, BINARY)
   uint8_t  src_id;         // Original transmitter ID
   uint8_t  dest_id;        // Final destination ID (0 = Gateway, 255 = Broadcast)
+  uint8_t  next_hop;       // Immediate next-hop node ID (255 = Broadcast/Flood, or specific Node ID)
   uint8_t  sender_id;      // Immediate hop transmitter ID
   uint8_t  hop_count;      // Hops traversed so far (starts at 0)
   uint8_t  path[MAX_PATH_LEN]; // Route path trace (supports up to 8 hops)
@@ -77,9 +74,6 @@ uint8_t lora_mesh_getNodeId();
 
 /// Lấy chuỗi biểu diễn địa chỉ MAC eFuse (vd: "34:85:18:9A:BC:2A")
 const char* lora_mesh_getMacString();
-
-/// Lấy mảng 6 byte địa chỉ MAC eFuse
-void lora_mesh_getMac(uint8_t mac[6]);
 
 /// Khởi tạo SX1262 + vào chế độ nhận
 /// @return true nếu thành công
@@ -109,9 +103,6 @@ bool lora_mesh_sendHeartbeat(bool requireAck = false);
 /// @return true nếu phát thành công
 bool lora_mesh_sendSOS(const char* payload, uint8_t payloadLen, bool requireAck = true);
 
-/// Gửi gói DATA tổng quát
-bool lora_mesh_sendData(const char* payload, uint8_t payloadLen, uint8_t destId = 0, bool requireAck = false);
-
 /// Đưa ESP32 vào chế độ Light Sleep khi rảnh rỗi (thức dậy bằng ngắt DIO1 hoặc timer)
 /// @param timeoutMs Thời gian tối đa ngủ trước khi tự động thức dậy (ms)
 /// @return true nếu đã ngủ và thức dậy thành công
@@ -129,5 +120,11 @@ void lora_mesh_checkBatteryProtection();
 
 /// Hàm tính toán động chu kỳ RXPS (MeshCore-style Dynamic Calculation)
 void lora_mesh_calcRxpsTimings(uint8_t level, uint8_t sf, float bw, uint8_t preamble, uint32_t* rx_us, uint32_t* sleep_us);
+
+/// Lấy số lần RX Watchdog đã kích hoạt khôi phục radio
+uint32_t lora_mesh_getWatchdogResets();
+
+/// In bảng định tuyến Routing Table ra Serial
+void lora_mesh_printRoutingTable();
 
 #endif // LORA_MESH_H

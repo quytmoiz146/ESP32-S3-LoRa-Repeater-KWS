@@ -19,16 +19,12 @@ bool ringBuffer_init(size_t capacitySamples) {
                                          MALLOC_CAP_SPIRAM);
   if (!rbBuffer) {
     // Fallback: thử internal RAM nếu không có PSRAM
-    Serial.println("[RB] PSRAM malloc failed, trying internal RAM...");
     rbBuffer = (int16_t*)malloc(capacitySamples * sizeof(int16_t));
     if (!rbBuffer) {
-      Serial.println("[RB] Ring buffer allocation FAILED!");
+      Serial.println("[ERR] Ring buffer allocation FAILED!");
       return false;
     }
-    Serial.println("[RB] Allocated on internal RAM (no PSRAM)");
-  } else {
-    Serial.printf("[RB] Allocated %u bytes on PSRAM\n",
-                  (unsigned)(capacitySamples * sizeof(int16_t)));
+    Serial.println("[WARN] Ring buffer allocated on internal RAM (no PSRAM)");
   }
 
   rbCapacity = capacitySamples;
@@ -44,9 +40,6 @@ bool ringBuffer_init(size_t capacitySamples) {
     return false;
   }
 
-  Serial.printf("[RB] Init OK — capacity=%u samples (%.1f sec @16kHz)\n",
-                (unsigned)rbCapacity,
-                (float)rbCapacity / 16000.0f);
   return true;
 }
 
@@ -97,16 +90,4 @@ size_t ringBuffer_readLatest(int16_t* dest, size_t count) {
 
   xSemaphoreGive(rbMutex);
   return actualCount;
-}
-
-size_t ringBuffer_available() {
-  if (!rbMutex) return 0;
-  xSemaphoreTake(rbMutex, portMAX_DELAY);
-  size_t count = rbCount;
-  xSemaphoreGive(rbMutex);
-  return count;
-}
-
-SemaphoreHandle_t ringBuffer_getMutex() {
-  return rbMutex;
 }
