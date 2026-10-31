@@ -71,7 +71,6 @@ void setup() {
                 LORA_BANDWIDTH, LORA_TX_POWER);
   Serial.println("  Interface: BLE Nordic UART + USB Serial");
   Serial.println("  App Command: CHAT:<client_id>:<target_node>:<utf8_text>\\n");
-  Serial.println("  Commands   : [t] SOS  [p] Ping  [h] Heartbeat  [r] Routes  [w] Watchdog");
   Serial.println("==================================================================");
 }
 
@@ -108,24 +107,6 @@ void loop() {
       if (serialBuffer.length() > 0) {
         if (serialBuffer.startsWith("CHAT:")) {
           lora_mesh_processChatCommand(serialBuffer.c_str());
-        } else if (serialBuffer.length() == 1) {
-          char cmd = serialBuffer[0];
-          if (cmd == 't' || cmd == 'T') {
-            Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
-            lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, GATEWAY_ID);
-          } else if (cmd == 'p' || cmd == 'P') {
-            Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
-            lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, BROADCAST_ID);
-          } else if (cmd == 'h' || cmd == 'H') {
-            Serial.println("[CMD] Test Heartbeat...");
-            lora_mesh_sendHeartbeat(false);
-          } else if (cmd == 'r' || cmd == 'R') {
-            Serial.println("[CMD] Mesh Routing Table:");
-            lora_mesh_printRoutingTable();
-          } else if (cmd == 'w' || cmd == 'W') {
-            Serial.printf("[CMD] RX Watchdog status: Resets: %lu\n",
-                          (unsigned long)lora_mesh_getWatchdogResets());
-          }
         }
       }
       serialBuffer = "";

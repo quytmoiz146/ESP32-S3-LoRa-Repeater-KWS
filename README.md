@@ -153,17 +153,20 @@ CHAT:<client_id>:<target_node>:<utf8_text>\n
   * Khi nhận ACK từ đích cuối: `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"DELIVERED"}`
   * Khi hết số lần thử (3 lần/2s): `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"FAILED","reason":"NO_ACK"}`
 
-### Các phím tắt điều khiển nhanh trên bàn phím:
+### Các phím tắt điều khiển nhanh trên bàn phím (Dành cho trạm Repeater):
+
+> [!NOTE]
+> Các thiết bị **Gateway** và **Node BLE** hoạt động thuần giao thức chuẩn hóa (PC NDJSON và Smartphone BLE UART), do đó không sử dụng phím tắt đơn lẻ để tránh gửi nhầm lệnh rác lên kênh truyền.
 
 | Phím tắt | Phạm vi áp dụng | Ý nghĩa & Hành vi |
 | :---: | :---: | :--- |
-| **`t`** / **`T`** | Mọi Node | Gửi gói tin giả lập **TEST SOS** nhị phân về Gateway (Dest: 0), kích hoạt còi và yêu cầu ACK. |
-| **`p`** / **`P`** | Mọi Node | Gửi **PING BROADCAST** tới toàn bộ mạng lưới để đo đạc chất lượng kết nối và yêu cầu ACK từ mọi node. |
-| **`h`** / **`H`** | Mọi Node | Gửi bản tin **Heartbeat Telemetry** (báo cáo điện áp pin, trạng thái hoạt động). |
-| **`r`** / **`R`** | `repeater_simple` / `gateway` / `node_ble` | Hiển thị toàn bộ bảng định tuyến **Routing Table** (Địa chỉ đích, Next-Hop, số chặng Hops, RSSI, tuổi tuyến đường). |
+| **`t`** / **`T`** | `repeater_simple` & `repeater_full` | Gửi gói tin giả lập **TEST SOS** nhị phân về Gateway (Dest: 0), kích hoạt còi và yêu cầu ACK. |
+| **`p`** / **`P`** | `repeater_simple` & `repeater_full` | Gửi **PING BROADCAST** tới toàn bộ mạng lưới để đo đạc chất lượng kết nối và yêu cầu ACK từ mọi node. |
+| **`h`** / **`H`** | `repeater_simple` & `repeater_full` | Gửi bản tin **Heartbeat Telemetry** (báo cáo điện áp pin, trạng thái hoạt động). |
+| **`r`** / **`R`** | `repeater_simple` | Hiển thị toàn bộ bảng định tuyến **Routing Table** (Địa chỉ đích, Next-Hop, số chặng Hops, RSSI, tuổi tuyến đường). |
 | **`m`** / **`M`** | `repeater_full` | Hiển thị toàn bộ bảng định tuyến **Routing Table** *(thay cho phím 'r' để tránh trùng lệnh thu âm)*. |
-| **`w`** / **`W`** | Mọi Node | Kiểm tra trạng thái **RX Watchdog** và số lần hệ thống đã tự động khôi phục chip radio SX1262. |
-| **`s`** / **`S`** | Mọi Node | Kiểm tra trạng thái **Chế độ tiết kiệm năng lượng kép (Dual Power Saving)**. |
+| **`w`** / **`W`** | `repeater_simple` & `repeater_full` | Kiểm tra trạng thái **RX Watchdog** và số lần hệ thống đã tự động khôi phục chip radio SX1262. |
+| **`s`** / **`S`** | `repeater_simple` & `repeater_full` | Kiểm tra trạng thái **Chế độ tiết kiệm năng lượng kép (Dual Power Saving)**. |
 | **`r`** / **`R`** | `repeater_full` | Ghi âm thủ công 1 file WAV 3 giây vào thẻ SD để phục vụ thu thập dữ liệu huấn luyện AI. |
 | **`c`** / **`C`** | `repeater_full` | Bật / tắt chế độ ghi âm WAV liên tục. |
 | **`q`** / **`Q`** | `repeater_full` | Thoát chế độ ghi âm liên tục, khôi phục lại luồng phát hiện AI. |

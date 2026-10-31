@@ -49,7 +49,6 @@ void setup() {
                 LORA_BANDWIDTH, LORA_TX_POWER);
   Serial.println("  Interface: PC USB Serial (115200) — Format: NDJSON");
   Serial.println("  PC Command: CHAT:<client_id>:<target_node>:<utf8_text>\\n");
-  Serial.println("  Test Keys : [t] SOS  [p] Ping  [h] Heartbeat  [r] Routes  [w] Watchdog");
   Serial.println("==================================================================");
   if (loraOk) {
     Serial.println("{\"type\":\"GATEWAY_READY\",\"node_id\":0,\"mac\":\"" + String(lora_mesh_getMacString()) + "\"}\n");
@@ -71,7 +70,7 @@ void loop() {
 
   lora_mesh_loop();
 
-  // Đọc lệnh từ Serial (hỗ trợ cả chuỗi CHAT:... và các phím tắt đơn lẻ)
+  // Đọc lệnh từ Serial (chuỗi lệnh CHAT:...)
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
@@ -80,24 +79,6 @@ void loop() {
       if (serialBuffer.length() > 0) {
         if (serialBuffer.startsWith("CHAT:")) {
           lora_mesh_processChatCommand(serialBuffer.c_str());
-        } else if (serialBuffer.length() == 1) {
-          char cmd = serialBuffer[0];
-          if (cmd == 't' || cmd == 'T') {
-            Serial.println("[CMD] Test SOS Broadcast...");
-            lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, BROADCAST_ID);
-          } else if (cmd == 'p' || cmd == 'P') {
-            Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
-            lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, BROADCAST_ID);
-          } else if (cmd == 'h' || cmd == 'H') {
-            Serial.println("[CMD] Test Heartbeat...");
-            lora_mesh_sendHeartbeat(false);
-          } else if (cmd == 'r' || cmd == 'R') {
-            Serial.println("[CMD] Mesh Routing Table:");
-            lora_mesh_printRoutingTable();
-          } else if (cmd == 'w' || cmd == 'W') {
-            Serial.printf("[CMD] RX Watchdog status: Resets: %lu\n",
-                          (unsigned long)lora_mesh_getWatchdogResets());
-          }
         }
       }
       serialBuffer = "";
