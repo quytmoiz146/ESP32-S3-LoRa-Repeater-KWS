@@ -472,82 +472,135 @@ void loop() {
   // Xử lý LoRa mesh (relay + heartbeat)
   lora_mesh_loop();
 
-  if (Serial.available()) {
-    char cmd = Serial.read();
-    switch (cmd) {
-    case 'r':
-    case 'R':
-      // Tạm dừng detection → ghi WAV → bật lại detection
-      pauseDetection();
-      recordWavFile();
-      resumeDetection();
-      break;
-    case 'c':
-    case 'C':
-      continuousMode = !continuousMode;
-      if (continuousMode) {
-        pauseDetection();
+  static String serialCmdBuf = "";
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c == '\n') {
+      serialCmdBuf.trim();
+      if (serialCmdBuf.length() > 0) {
+        if (serialCmdBuf.startsWith("CHAT:")) {
+          lora_mesh_processChatCommand(serialCmdBuf.c_str());
+        } else if (serialCmdBuf.length() == 1) {
+          char cmd = serialCmdBuf[0];
+          switch (cmd) {
+          case 'r':
+          case 'R':
+            pauseDetection();
+            recordWavFile();
+            resumeDetection();
+            break;
+          case 'c':
+          case 'C':
+            continuousMode = !continuousMode;
+            if (continuousMode) pauseDetection();
+            else resumeDetection();
+            Serial.printf("[SYS] Continuous recording: %s\n", continuousMode ? "ON" : "OFF");
+            break;
+          case 'q':
+          case 'Q':
+            continuousMode = false;
+            resumeDetection();
+            Serial.println("[CMD] Stopped continuous recording");
+            break;
+          case 't':
+          case 'T':
+            Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
+            g_alarm_end_ms = millis() + 7000;
+            lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, GATEWAY_ID);
+            break;
+          case 'p':
+          case 'P':
+            Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
+            lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, BROADCAST_ID);
+            break;
+          case 'h':
+          case 'H':
+            Serial.println("[CMD] Test Heartbeat Telemetry...");
+            lora_mesh_sendHeartbeat(false);
+            break;
+          case 'm':
+          case 'M':
+            Serial.println("[CMD] Mesh Routing Table:");
+            lora_mesh_printRoutingTable();
+            break;
+          case 'w':
+          case 'W':
+            Serial.printf("[CMD] RX Watchdog status: %s (Timeout: %lums) | Resets: %lu\n",
+                          LORA_RX_WATCHDOG_ENABLED ? "ACTIVE" : "DISABLED",
+                          (unsigned long)LORA_RX_WATCHDOG_TIMEOUT_MS,
+                          (unsigned long)lora_mesh_getWatchdogResets());
+            break;
+          case 's':
+          case 'S':
+            Serial.printf("[CMD] Power Saving: SX1262 RXPS: %s (Level %d)\n",
+                          LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
+                          LORA_RXPS_LEVEL);
+            break;
+          default:
+            break;
+          }
+        }
+      }
+      serialCmdBuf = "";
+    } else {
+      if (serialCmdBuf.isEmpty() && c != 'C' && c != 'c') {
+        // Phím tắt đơn lẻ không phải tiền tố CHAT -> thực thi ngay lập tức
+        switch (c) {
+        case 'r':
+        case 'R':
+          pauseDetection();
+          recordWavFile();
+          resumeDetection();
+          break;
+        case 'q':
+        case 'Q':
+          continuousMode = false;
+          resumeDetection();
+          Serial.println("[CMD] Stopped continuous recording");
+          break;
+        case 't':
+        case 'T':
+          Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
+          g_alarm_end_ms = millis() + 7000;
+          lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, GATEWAY_ID);
+          break;
+        case 'p':
+        case 'P':
+          Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
+          lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, BROADCAST_ID);
+          break;
+        case 'h':
+        case 'H':
+          Serial.println("[CMD] Test Heartbeat Telemetry...");
+          lora_mesh_sendHeartbeat(false);
+          break;
+        case 'm':
+        case 'M':
+          Serial.println("[CMD] Mesh Routing Table:");
+          lora_mesh_printRoutingTable();
+          break;
+        case 'w':
+        case 'W':
+          Serial.printf("[CMD] RX Watchdog status: %s (Timeout: %lums) | Resets: %lu\n",
+                        LORA_RX_WATCHDOG_ENABLED ? "ACTIVE" : "DISABLED",
+                        (unsigned long)LORA_RX_WATCHDOG_TIMEOUT_MS,
+                        (unsigned long)lora_mesh_getWatchdogResets());
+          break;
+        case 's':
+        case 'S':
+          Serial.printf("[CMD] Power Saving: SX1262 RXPS: %s (Level %d)\n",
+                        LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
+                        LORA_RXPS_LEVEL);
+          break;
+        default:
+          break;
+        }
       } else {
-        resumeDetection();
+        if (serialCmdBuf.length() < 256) {
+          serialCmdBuf += c;
+        }
       }
-      Serial.printf("[SYS] Continuous recording: %s\n",
-                    continuousMode ? "ON" : "OFF");
-      break;
-
-    case 'q':
-    case 'Q':
-      continuousMode = false;
-      resumeDetection();
-      Serial.println("[CMD] Stopped continuous recording");
-      break;
-    case 't':
-    case 'T':
-      {
-        Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
-        g_alarm_end_ms = millis() + 7000; // Test còi 7s
-        lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, GATEWAY_ID);
-      }
-      break;
-    case 'p':
-    case 'P':
-      {
-        Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");
-        lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, BROADCAST_ID);
-      }
-      break;
-    case 'h':
-    case 'H':
-      {
-        Serial.println("[CMD] Test Heartbeat Telemetry...");
-        lora_mesh_sendHeartbeat(false);
-      }
-      break;
-    case 'm':
-    case 'M':
-      {
-        Serial.println("[CMD] Mesh Routing Table:");
-        lora_mesh_printRoutingTable();
-      }
-      break;
-    case 'w':
-    case 'W':
-      {
-        Serial.printf("[CMD] RX Watchdog status: %s (Timeout: %lums) | Resets: %lu\n",
-                      LORA_RX_WATCHDOG_ENABLED ? "ACTIVE" : "DISABLED",
-                      (unsigned long)LORA_RX_WATCHDOG_TIMEOUT_MS,
-                      (unsigned long)lora_mesh_getWatchdogResets());
-      }
-      break;
-    case 's':
-    case 'S':
-      {
-        Serial.printf("[CMD] Power Saving: SX1262 RXPS: %s (Level %d)\n",
-                      LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
-                      LORA_RXPS_LEVEL);
-      }
-      break;
-    default:
-      break;
     }
   }
 

@@ -9,10 +9,12 @@
 // ============================================================
 #define MESH_MAGIC       0xAA
 #define MAX_PATH_LEN     8     // Kích thước mảng path[] cho loop prevention
-#define PKT_TYPE_DATA    1
-#define PKT_TYPE_SOS     2
-#define PKT_TYPE_ACK     3
-#define PKT_TYPE_PING    4
+#define PKT_TYPE_DATA     1
+#define PKT_TYPE_SOS      2
+#define PKT_TYPE_ACK      3
+#define PKT_TYPE_PING     4
+#define PKT_TYPE_CHAT     5
+#define PKT_TYPE_CHAT_ACK 6
 
 // --- Packet Flags (QoS & Định dạng) ---
 #define PKT_FLAG_NONE     0x00
@@ -126,5 +128,34 @@ uint32_t lora_mesh_getWatchdogResets();
 
 /// In bảng định tuyến Routing Table ra Serial
 void lora_mesh_printRoutingTable();
+
+// ============================================================
+//  Dịch vụ Chat hai chiều (Two-Way Chat Service)
+// ============================================================
+typedef void (*ChatRecvCallback)(uint8_t src_id, uint8_t dest_id, const char* text, uint16_t msg_id, uint8_t hops, float rssi, float snr);
+typedef void (*ChatStatusCallback)(uint32_t client_id, uint16_t msg_id, const char* status, const char* reason);
+
+/// Gửi tin nhắn chat tới node đích (có quản lý timeout 2000ms & retry 3 lần)
+/// @param target ID của node đích (0 = Gateway, hoặc ID của Node/Balo)
+/// @param text Nội dung tin nhắn UTF-8
+/// @param client_id ID của client trên App/PC để đối chiếu trạng thái
+/// @return true nếu xếp hàng gửi thành công
+bool lora_mesh_sendChat(uint8_t target, const char* text, uint32_t client_id = 0);
+
+/// Đăng ký hàm callback nhận tin nhắn Chat
+void lora_mesh_setChatCallback(ChatRecvCallback cb);
+
+/// Đăng ký hàm callback nhận thông báo trạng thái Chat (SENDING, DELIVERED, FAILED)
+void lora_mesh_setChatStatusCallback(ChatStatusCallback cb);
+
+/// Xử lý dòng lệnh CHAT (từ Serial PC hoặc BLE Mobile App)
+/// Cú pháp: CHAT:<client_id>:<target>:<utf8_text>
+bool lora_mesh_processChatCommand(const char* line);
+
+/// Phát sự kiện Chat Status qua callback và Serial NDJSON
+void lora_mesh_emitChatStatus(uint32_t client_id, uint16_t msg_id, const char* status, const char* reason = nullptr);
+
+/// Kiểm tra xem có tin nhắn Chat nào đang đợi ACK hay không
+bool lora_mesh_isChatPending();
 
 #endif // LORA_MESH_H

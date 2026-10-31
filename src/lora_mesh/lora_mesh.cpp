@@ -261,6 +261,77 @@ struct PendingAck {
 static PendingAck g_pending_ack = {false};
 
 // ============================================================
+//  Dịch vụ Chat Hai Chiều (Two-Way Chat Service)
+// ============================================================
+struct PendingChat {
+  bool     active = false;
+  uint32_t client_id = 0;
+  uint16_t msg_id = 0;
+  uint8_t  target = 0;
+  uint8_t  attempts = 0;
+  uint32_t last_tx_ms = 0;
+  uint32_t timeout_ms = 2000;
+  uint8_t  max_retries = 3;
+  char     text[128] = {};
+};
+static PendingChat g_pending_chat;
+
+static ChatRecvCallback g_chat_recv_cb = nullptr;
+static ChatStatusCallback g_chat_status_cb = nullptr;
+
+#define CHAT_SEEN_CACHE_SIZE 16
+struct ChatSeenEntry {
+  uint8_t  src_id;
+  uint16_t msg_id;
+  uint32_t timestamp;
+};
+static ChatSeenEntry g_chat_seen_cache[CHAT_SEEN_CACHE_SIZE];
+static uint8_t g_chat_seen_idx = 0;
+
+static bool isChatSeen(uint8_t src_id, uint16_t msg_id) {
+  for (uint8_t i = 0; i < CHAT_SEEN_CACHE_SIZE; i++) {
+    if (g_chat_seen_cache[i].src_id == src_id && g_chat_seen_cache[i].msg_id == msg_id) {
+      if (millis() - g_chat_seen_cache[i].timestamp < 60000) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+static void markChatSeen(uint8_t src_id, uint16_t msg_id) {
+  g_chat_seen_cache[g_chat_seen_idx].src_id = src_id;
+  g_chat_seen_cache[g_chat_seen_idx].msg_id = msg_id;
+  g_chat_seen_cache[g_chat_seen_idx].timestamp = millis();
+  g_chat_seen_idx = (g_chat_seen_idx + 1) % CHAT_SEEN_CACHE_SIZE;
+}
+
+void lora_mesh_setChatCallback(ChatRecvCallback cb) {
+  g_chat_recv_cb = cb;
+}
+
+void lora_mesh_setChatStatusCallback(ChatStatusCallback cb) {
+  g_chat_status_cb = cb;
+}
+
+bool lora_mesh_isChatPending() {
+  return g_pending_chat.active;
+}
+
+void lora_mesh_emitChatStatus(uint32_t client_id, uint16_t msg_id, const char* status, const char* reason) {
+  if (g_chat_status_cb) {
+    g_chat_status_cb(client_id, msg_id, status, reason);
+  }
+  if (reason) {
+    Serial.printf("{\"type\":\"CHAT_STATUS\",\"client_id\":%lu,\"msg_id\":%u,\"status\":\"%s\",\"reason\":\"%s\"}\n",
+                  (unsigned long)client_id, msg_id, status, reason);
+  } else {
+    Serial.printf("{\"type\":\"CHAT_STATUS\",\"client_id\":%lu,\"msg_id\":%u,\"status\":\"%s\"}\n",
+                  (unsigned long)client_id, msg_id, status);
+  }
+}
+
+// ============================================================
 //  Helpers
 // ============================================================
 static String formatPath(const MeshPacket &pkt) {
@@ -503,6 +574,125 @@ static void sendAckPacket(uint8_t dest_id, uint16_t ack_msg_id) {
 }
 
 // ============================================================
+//  Thực thi gửi & thử lại tin nhắn Chat (Stop-and-Wait ARQ)
+// ============================================================
+static void transmitPendingChat() {
+  if (!g_pending_chat.active) return;
+  MeshPacket pkt;
+  memset(&pkt, 0, sizeof(pkt));
+  pkt.magic = MESH_MAGIC;
+  pkt.msg_id = g_pending_chat.msg_id;
+  pkt.msg_type = PKT_TYPE_CHAT;
+  pkt.flags = PKT_FLAG_ACK_REQ;
+  pkt.src_id = MY_NODE_ID;
+  pkt.dest_id = g_pending_chat.target;
+#if LORA_UNICAST_ROUTING_ENABLED
+  pkt.next_hop = findNextHop(g_pending_chat.target);
+#else
+  pkt.next_hop = BROADCAST_ID;
+#endif
+  pkt.sender_id = MY_NODE_ID;
+  pkt.hop_count = 0;
+  pkt.path[0] = MY_NODE_ID;
+
+  size_t len = strlen(g_pending_chat.text);
+  if (len > sizeof(pkt.payload) - 1) len = sizeof(pkt.payload) - 1;
+  memcpy(pkt.payload, g_pending_chat.text, len);
+  pkt.payload_len = len;
+
+  g_pending_chat.attempts++;
+  g_pending_chat.last_tx_ms = millis();
+
+  if (g_pending_chat.attempts == 1) {
+    lora_mesh_emitChatStatus(g_pending_chat.client_id, g_pending_chat.msg_id, "SENDING");
+  }
+
+  Serial.printf("[CHAT] TX #%u -> Node %u (Attempt %d/%d, NextHop:%u): \"%s\"\n",
+                g_pending_chat.msg_id, g_pending_chat.target,
+                g_pending_chat.attempts, g_pending_chat.max_retries,
+                pkt.next_hop, g_pending_chat.text);
+
+  int state = executeTransmit(pkt);
+  if (state != RADIOLIB_ERR_NONE && g_pending_chat.attempts >= g_pending_chat.max_retries) {
+    lora_mesh_emitChatStatus(g_pending_chat.client_id, g_pending_chat.msg_id, "FAILED", "RADIO");
+    g_pending_chat.active = false;
+  }
+}
+
+static void tickPendingChat() {
+  if (!g_pending_chat.active) return;
+  if (millis() - g_pending_chat.last_tx_ms < g_pending_chat.timeout_ms) return;
+
+  if (g_pending_chat.attempts >= g_pending_chat.max_retries) {
+    Serial.printf("[CHAT] FAIL: No ACK for msg #%u after %d attempts!\n",
+                  g_pending_chat.msg_id, g_pending_chat.max_retries);
+    lora_mesh_emitChatStatus(g_pending_chat.client_id, g_pending_chat.msg_id, "FAILED", "NO_ACK");
+    g_pending_chat.active = false;
+  } else {
+    transmitPendingChat();
+  }
+}
+
+bool lora_mesh_sendChat(uint8_t target, const char* text, uint32_t client_id) {
+  if (!text || !text[0]) {
+    lora_mesh_emitChatStatus(client_id, 0, "FAILED", "BAD_FORMAT");
+    return false;
+  }
+  if (target == MY_NODE_ID) {
+    lora_mesh_emitChatStatus(client_id, 0, "FAILED", "BAD_TARGET");
+    return false;
+  }
+  if (strlen(text) >= sizeof(g_pending_chat.text)) {
+    lora_mesh_emitChatStatus(client_id, 0, "FAILED", "TOO_LONG");
+    return false;
+  }
+  if (g_pending_chat.active) {
+    lora_mesh_emitChatStatus(client_id, 0, "FAILED", "BUSY");
+    return false;
+  }
+
+  g_pending_chat.active = true;
+  g_pending_chat.client_id = client_id;
+  g_pending_chat.msg_id = nextMsgId++;
+  g_pending_chat.target = target;
+  g_pending_chat.attempts = 0;
+  g_pending_chat.timeout_ms = 2000;
+  g_pending_chat.max_retries = 3;
+  strncpy(g_pending_chat.text, text, sizeof(g_pending_chat.text) - 1);
+  g_pending_chat.text[sizeof(g_pending_chat.text) - 1] = '\0';
+
+  transmitPendingChat();
+  return true;
+}
+
+bool lora_mesh_processChatCommand(const char* line) {
+  if (!line || strncmp(line, "CHAT:", 5) != 0) return false;
+  const char* p1 = strchr(line + 5, ':');
+  if (!p1) {
+    lora_mesh_emitChatStatus(0, 0, "FAILED", "BAD_FORMAT");
+    return false;
+  }
+  const char* p2 = strchr(p1 + 1, ':');
+  if (!p2) {
+    lora_mesh_emitChatStatus(0, 0, "FAILED", "BAD_FORMAT");
+    return false;
+  }
+
+  uint32_t clientId = strtoul(line + 5, nullptr, 10);
+  uint8_t target = (uint8_t)strtoul(p1 + 1, nullptr, 10);
+  const char* message = p2 + 1;
+
+  char cleanMsg[128] = {};
+  strncpy(cleanMsg, message, sizeof(cleanMsg) - 1);
+  size_t l = strlen(cleanMsg);
+  while (l > 0 && (cleanMsg[l - 1] == '\r' || cleanMsg[l - 1] == '\n')) {
+    cleanMsg[--l] = '\0';
+  }
+
+  return lora_mesh_sendChat(target, cleanMsg, clientId);
+}
+
+// ============================================================
 //  Xử lý gói tin đến
 // ============================================================
 static void processIncomingPacket() {
@@ -560,6 +750,12 @@ static void processIncomingPacket() {
   // 3. Deduplication (chống lặp gói)
   if (isPacketSeen(pkt.src_id, pkt.msg_id)) {
     stats_dropped_seen++;
+    // Nếu là gói tin Chat gửi đích danh cho mình mà bị lặp (do gói ACK trước bị rơi trên đường truyền):
+    // Bắt buộc phải phát lại gói ACK để giải phóng hàng đợi retry của bên gửi!
+    if (pkt.msg_type == PKT_TYPE_CHAT && pkt.dest_id == MY_NODE_ID) {
+      Serial.printf("[CHAT] Duplicate msg #%u from Node %u -> Resending ACK\n", pkt.msg_id, pkt.src_id);
+      sendAckPacket(pkt.src_id, pkt.msg_id);
+    }
     return;
   }
   markPacketSeen(pkt.src_id, pkt.msg_id);
@@ -572,11 +768,14 @@ static void processIncomingPacket() {
     typeStr = "SOS";
     g_alarm_end_ms = millis() + 7000; // Bật còi 7s khi nhận được SOS (cả repeater cũng kêu)
   }
-  else if (pkt.msg_type == PKT_TYPE_ACK) {
+  else if (pkt.msg_type == PKT_TYPE_ACK || pkt.msg_type == PKT_TYPE_CHAT_ACK) {
     typeStr = "ACK";
   }
   else if (pkt.msg_type == PKT_TYPE_PING) {
     typeStr = "PING";
+  }
+  else if (pkt.msg_type == PKT_TYPE_CHAT) {
+    typeStr = "CHAT";
   }
 
   char payloadInfo[64] = {0};
@@ -586,6 +785,10 @@ static void processIncomingPacket() {
       if (bin->alert_type == ALERT_HEARTBEAT) {
         typeStr = "HEARTBEAT";
         snprintf(payloadInfo, sizeof(payloadInfo), "Batt:%.2fV", bin->battery_mv / 1000.0f);
+        if (pkt.dest_id == MY_NODE_ID || pkt.dest_id == GATEWAY_ID) {
+          Serial.printf("{\"type\":\"HEARTBEAT\",\"src\":%u,\"battery\":%u,\"role\":\"REPEATER\",\"rssi\":%.1f,\"snr\":%.1f}\n",
+                        pkt.src_id, bin->battery_mv, rssi, snr);
+        }
       } else {
         const char* alertName = (bin->alert_type == ALERT_BAWL) ? "BAWL" : 
                                 (bin->alert_type == ALERT_TEST) ? "TEST" : "ALERT";
@@ -593,9 +796,13 @@ static void processIncomingPacket() {
                               (bin->direction == DIR_RIGHT) ? "R" : "C";
         snprintf(payloadInfo, sizeof(payloadInfo), "%s %d%% [%s] | Batt:%.2fV",
                  alertName, bin->confidence, dirName, bin->battery_mv / 1000.0f);
+        if (pkt.dest_id == MY_NODE_ID || pkt.dest_id == GATEWAY_ID) {
+          Serial.printf("{\"type\":\"SOS\",\"src\":%u,\"alert\":\"%s\",\"confidence\":%u,\"dir\":\"%s\",\"battery\":%u,\"msg_id\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
+                        pkt.src_id, alertName, bin->confidence, dirName, bin->battery_mv, pkt.msg_id, rssi, snr);
+        }
       }
     }
-  } else if (pkt.msg_type == PKT_TYPE_ACK) {
+  } else if (pkt.msg_type == PKT_TYPE_ACK || pkt.msg_type == PKT_TYPE_CHAT_ACK) {
     snprintf(payloadInfo, sizeof(payloadInfo), "ACK-OK");
   } else if (pkt.payload_len > 0) {
     snprintf(payloadInfo, sizeof(payloadInfo), "\"%.32s\"", pkt.payload);
@@ -616,18 +823,40 @@ static void processIncomingPacket() {
   }
 
   // 5. QoS: Xử lý khi nhận được gói ACK phản hồi
-  if (pkt.flags & PKT_FLAG_IS_ACK) {
+  if ((pkt.flags & PKT_FLAG_IS_ACK) || pkt.msg_type == PKT_TYPE_ACK || pkt.msg_type == PKT_TYPE_CHAT_ACK) {
+    // 5.1. Xác nhận ACK cho gói SOS / Data thông thường
     if (g_pending_ack.active && g_pending_ack.pkt.msg_id == pkt.msg_id) {
       uint32_t rtt = millis() - g_pending_ack.sent_at;
       g_pending_ack.active = false;
       Serial.printf("[QoS] ✓ ACK CONFIRMED for msg #%u from Node %u (RTT: %lums)\n",
                     pkt.msg_id, pkt.src_id, (unsigned long)rtt);
     }
+    // 5.2. Xác nhận ACK cho gói Chat (yêu cầu từ chính đích cuối khớp target và msg_id)
+    if (g_pending_chat.active && g_pending_chat.msg_id == pkt.msg_id && g_pending_chat.target == pkt.src_id) {
+      uint32_t rtt = millis() - g_pending_chat.last_tx_ms;
+      g_pending_chat.active = false;
+      lora_mesh_emitChatStatus(g_pending_chat.client_id, pkt.msg_id, "DELIVERED");
+      Serial.printf("[CHAT] ✓ DELIVERED msg #%u to Node %u (RTT: %lums)\n",
+                    pkt.msg_id, pkt.src_id, (unsigned long)rtt);
+    }
     // Gói ACK đã tới đích cuối thì không relay tiếp
     if (pkt.dest_id == MY_NODE_ID) return;
   }
 
-  // 6. QoS: Phản hồi ACK nếu gói tin yêu cầu
+  // 6. Xử lý khi nhận tin nhắn Chat gửi đích danh cho node này
+  if (pkt.msg_type == PKT_TYPE_CHAT && (pkt.dest_id == MY_NODE_ID || pkt.dest_id == BROADCAST_ID)) {
+    // Xuất chuỗi NDJSON cho PC / Smartphone App
+    Serial.printf("{\"type\":\"CHAT\",\"src\":%u,\"dest\":%u,\"text\":\"%s\",\"msg_id\":%u,\"hops\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
+                  pkt.src_id, pkt.dest_id, pkt.payload, pkt.msg_id, pkt.hop_count, rssi, snr);
+    if (g_chat_recv_cb) {
+      g_chat_recv_cb(pkt.src_id, pkt.dest_id, pkt.payload, pkt.msg_id, pkt.hop_count, rssi, snr);
+    }
+    // Phát ACK xác nhận cho bên gửi
+    sendAckPacket(pkt.src_id, pkt.msg_id);
+    if (pkt.dest_id == MY_NODE_ID) return; // Dừng relay
+  }
+
+  // 6.5. QoS: Phản hồi ACK nếu gói tin SOS/Data yêu cầu
   if (pkt.flags & PKT_FLAG_ACK_REQ) {
     if (pkt.dest_id == MY_NODE_ID || pkt.dest_id == BROADCAST_ID) {
       sendAckPacket(pkt.src_id, pkt.msg_id);
@@ -952,6 +1181,9 @@ void lora_mesh_loop() {
     }
   }
 
+  // 2.5. Chat Service: Kiểm tra timeout và thử lại tin nhắn Chat (2000ms / 3 lần)
+  tickPendingChat();
+
   // 3. RX Watchdog (RXPS Watchdog): Giám sát phần cứng và duy trì chế độ nhận
   checkRxWatchdog();
 
@@ -1003,6 +1235,19 @@ bool lora_mesh_light_sleep(uint32_t timeoutMs) {
       }
     } else {
       return false; // Đã quá hạn ACK, để loop() xử lý retransmit ngay lập tức
+    }
+  }
+
+  // Không ngủ dài nếu đang đợi xác nhận tin nhắn Chat
+  if (g_pending_chat.active) {
+    uint32_t elapsed = millis() - g_pending_chat.last_tx_ms;
+    if (elapsed < g_pending_chat.timeout_ms) {
+      uint32_t remaining = g_pending_chat.timeout_ms - elapsed;
+      if (timeoutMs == 0 || remaining < timeoutMs) {
+        timeoutMs = remaining;
+      }
+    } else {
+      return false; // Đã quá hạn Chat ACK, để loop() xử lý retransmit ngay lập tức
     }
   }
 

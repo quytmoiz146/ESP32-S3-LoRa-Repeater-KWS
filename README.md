@@ -100,28 +100,42 @@ Hệ thống xây dựng trên module vi điều khiển **ESP32-S3-DevKitC-1 (8
 
 ---
 
-## 📡 Hai Môi Trường Firmware (PlatformIO Environments)
+## 📡 Các Môi Trường Firmware (PlatformIO Environments)
 
-Dự án cung cấp 2 chế độ biên dịch tối ưu hóa tùy mục đích sử dụng trong file [platformio.ini](file:///d:/LearnEsp32/Repeater/platformio.ini):
+Dự án cung cấp 4 chế độ biên dịch tối ưu hóa tùy vai trò thiết bị trong file [platformio.ini](file:///d:/LearnEsp32/Repeater/platformio.ini):
 
-### 1. `node_full` (Trạm Đầu Cuối / Trạm Giám Sát Toàn Diện)
-* **Chức năng**: Thu âm I2S 2 micro, chạy VAD, chạy mô hình AI nhận diện tiếng kêu cứu, lưu file WAV lên thẻ nhớ SD và gửi bản tin khẩn cấp SOS về trung tâm.
+### 1. `repeater_full` (Trạm Đầu Cuối / Trạm Giám Sát Toàn Diện)
+* **Chức năng**: Thu âm I2S 2 micro, chạy VAD, mô hình AI KWS nhận diện tiếng kêu cứu, lưu file WAV lên thẻ nhớ SD, gửi bản tin SOS và hỗ trợ Chat hai chiều qua Serial.
 * **Lệnh nạp**:
   ```bash
-  pio run -e node_full --target upload
+  pio run -e repeater_full --target upload
   ```
 
-### 2. `node_repeater` (Trạm Lặp Trung Chuyển Tối Giản)
-* **Chức năng**: Không sử dụng I2S/Audio/SD card. Đóng vai trò là trạm lặp trung gian đặt trên đỉnh núi hoặc cây cao để tiếp sóng LoRa Mesh về Gateway.
-* **Đặc tính**: Kích hoạt toàn diện **Tiết kiệm năng lượng kép** (SX1262 RX Duty Cycle + MCU Light Sleep), chạy hàng tháng trời chỉ với một viên pin 18650 và tấm pin năng lượng mặt trời mini.
+### 2. `repeater_simple` (Trạm Lặp Trung Chuyển Tối Giản)
+* **Chức năng**: Không sử dụng I2S/Audio/SD card/BLE. Đóng vai trò là trạm lặp trung gian đặt trên đỉnh núi hoặc cây cao để tiếp sóng LoRa Mesh (chuyển tiếp mọi gói SOS, Chat, ACK, Heartbeat).
+* **Đặc tính**: Kích hoạt toàn diện **Tiết kiệm năng lượng kép** (SX1262 RX Duty Cycle + MCU Light Sleep), chạy hàng tháng trời chỉ với một viên pin 18650 và pin mặt trời mini.
 * **Lệnh nạp**:
   ```bash
-  pio run -e node_repeater --target upload
+  pio run -e repeater_simple --target upload
+  ```
+
+### 3. `gateway` (Trạm Cổng Chỉ Huy Trung Tâm)
+* **Chức năng**: Cắm trực tiếp vào PC/Laptop qua cổng USB, giao tiếp hai chiều dạng **NDJSON** qua Serial (115200 baud). Không cần BLE. Nhận lệnh `CHAT:...` từ PC để gửi tới mọi node trong mạng lưới.
+* **Lệnh nạp**:
+  ```bash
+  pio run -e gateway --target upload
+  ```
+
+### 4. `node_ble` (Thiết Bị Cầm Tay / Balo Hiện Trường)
+* **Chức năng**: Kết nối trực tiếp với Smartphone qua **BLE Nordic UART Service (NUS)**. Cho phép người dùng soạn/nhận tin nhắn tiếng Việt có dấu qua App di động, quản lý retry và xác nhận `DELIVERED`.
+* **Lệnh nạp**:
+  ```bash
+  pio run -e node_ble --target upload
   ```
 
 ---
 
-## 💻 Tập Lệnh Điều Khiển Qua Serial Monitor (CLI)
+## 💻 Tập Lệnh Điều Khiển Qua Serial Monitor (CLI) & App
 
 Mở Serial Monitor ở tốc độ baud **115200**:
 
@@ -129,20 +143,30 @@ Mở Serial Monitor ở tốc độ baud **115200**:
 pio device monitor -b 115200
 ```
 
-Các phím tắt điều khiển trực tiếp trên bàn phím:
+### Lệnh Chat Hai Chiều (Gửi từ PC hoặc Mobile App qua BLE):
+```text
+CHAT:<client_id>:<target_node>:<utf8_text>\n
+```
+* **Ví dụ**: `CHAT:101:0:Báo cáo đội 1 đã tới điểm tập kết` (Gửi tới Gateway 0).
+* **Phản hồi trạng thái (NDJSON)**:
+  * Khi phát sóng: `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"SENDING"}`
+  * Khi nhận ACK từ đích cuối: `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"DELIVERED"}`
+  * Khi hết số lần thử (3 lần/2s): `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"FAILED","reason":"NO_ACK"}`
+
+### Các phím tắt điều khiển nhanh trên bàn phím:
 
 | Phím tắt | Phạm vi áp dụng | Ý nghĩa & Hành vi |
 | :---: | :---: | :--- |
-| **`t`** / **`T`** | Cả 2 Node | Gửi gói tin giả lập **TEST SOS** nhị phân về Gateway (Dest: 0), kích hoạt còi và yêu cầu ACK. |
-| **`p`** / **`P`** | Cả 2 Node | Gửi **PING BROADCAST** tới toàn bộ mạng lưới để đo đạc chất lượng kết nối và yêu cầu ACK từ mọi node. |
-| **`h`** / **`H`** | Cả 2 Node | Gửi bản tin **Heartbeat Telemetry** (báo cáo điện áp pin, trạng thái hoạt động). |
-| **`r`** / **`R`** | `node_repeater` | Hiển thị toàn bộ bảng định tuyến **Routing Table** (Địa chỉ đích, Next-Hop, số chặng Hops, RSSI, tuổi tuyến đường). |
-| **`m`** / **`M`** | `node_full` | Hiển thị toàn bộ bảng định tuyến **Routing Table** *(thay cho phím 'r' để tránh trùng lệnh thu âm)*. |
-| **`w`** / **`W`** | Cả 2 Node | Kiểm tra trạng thái **RX Watchdog** và số lần hệ thống đã tự động khôi phục chip radio SX1262. |
-| **`s`** / **`S`** | Cả 2 Node | Kiểm tra trạng thái **Chế độ tiết kiệm năng lượng kép (Dual Power Saving)**. |
-| **`r`** / **`R`** | `node_full` | Ghi âm thủ công 1 file WAV 3 giây vào thẻ SD để phục vụ thu thập dữ liệu huấn luyện AI. |
-| **`c`** / **`C`** | `node_full` | Bật / tắt chế độ ghi âm WAV liên tục. |
-| **`q`** / **`Q`** | `node_full` | Thoát chế độ ghi âm liên tục, khôi phục lại luồng phát hiện AI. |
+| **`t`** / **`T`** | Mọi Node | Gửi gói tin giả lập **TEST SOS** nhị phân về Gateway (Dest: 0), kích hoạt còi và yêu cầu ACK. |
+| **`p`** / **`P`** | Mọi Node | Gửi **PING BROADCAST** tới toàn bộ mạng lưới để đo đạc chất lượng kết nối và yêu cầu ACK từ mọi node. |
+| **`h`** / **`H`** | Mọi Node | Gửi bản tin **Heartbeat Telemetry** (báo cáo điện áp pin, trạng thái hoạt động). |
+| **`r`** / **`R`** | `repeater_simple` / `gateway` / `node_ble` | Hiển thị toàn bộ bảng định tuyến **Routing Table** (Địa chỉ đích, Next-Hop, số chặng Hops, RSSI, tuổi tuyến đường). |
+| **`m`** / **`M`** | `repeater_full` | Hiển thị toàn bộ bảng định tuyến **Routing Table** *(thay cho phím 'r' để tránh trùng lệnh thu âm)*. |
+| **`w`** / **`W`** | Mọi Node | Kiểm tra trạng thái **RX Watchdog** và số lần hệ thống đã tự động khôi phục chip radio SX1262. |
+| **`s`** / **`S`** | Mọi Node | Kiểm tra trạng thái **Chế độ tiết kiệm năng lượng kép (Dual Power Saving)**. |
+| **`r`** / **`R`** | `repeater_full` | Ghi âm thủ công 1 file WAV 3 giây vào thẻ SD để phục vụ thu thập dữ liệu huấn luyện AI. |
+| **`c`** / **`C`** | `repeater_full` | Bật / tắt chế độ ghi âm WAV liên tục. |
+| **`q`** / **`Q`** | `repeater_full` | Thoát chế độ ghi âm liên tục, khôi phục lại luồng phát hiện AI. |
 
 ---
 
@@ -173,14 +197,17 @@ ESP32-S3-LoRa-Repeater-KWS/
 ├── lib/
 │   └── KWS/                      # Thư viện mạng nơ-ron Edge Impulse (mô hình int8)
 ├── src/
-│   ├── main_full.cpp             # Điểm chạy chính cho node đầy đủ (AI + Audio + LoRa)
-│   ├── main_repeater.cpp         # Điểm chạy chính cho node lặp trung chuyển (LoRa Relay)
+│   ├── main_repeater_full.cpp    # Điểm chạy chính cho trạm đầy đủ (KWS AI + Audio + LoRa + Chat)
+│   ├── main_repeater_simple.cpp  # Điểm chạy chính cho trạm lặp trung chuyển tối giản (LoRa Relay)
+│   ├── main_gateway.cpp          # Điểm chạy chính cho trạm cổng chỉ huy PC (USB Serial NDJSON)
+│   ├── main_node.cpp             # Điểm chạy chính cho thiết bị cầm tay / balo (BLE Nordic UART)
+│   ├── ble/                      # Module BLE Nordic UART kết nối Mobile App
 │   ├── capture/                  # Tác vụ I2S DMA đọc âm thanh đa kênh real-time
 │   ├── tier0/                    # Tầng lọc năng lượng âm thanh VAD (Voice Activity Detection)
 │   ├── stereo_process/           # Xử lý âm thanh Stereo kép, cân bằng năng lượng & ước lượng hướng
 │   ├── keyword_spot/             # Tầng suy luận AI KWS, trích xuất MFCC & xác nhận từ khóa
 │   ├── ringbuffer/               # Bộ đệm vòng PSRAM lưu trữ âm thanh pre-roll
-│   └── lora_mesh/                # Driver SX1262, định tuyến Mesh, QoS, Watchdog & RXPS
+│   └── lora_mesh/                # Driver SX1262, định tuyến Mesh, QoS, Chat, Watchdog & RXPS
 ├── platformio.ini                # Cấu hình nạp firmware, phân luồng build_src_filter và cổng COM
 └── README.md                     # Tài liệu hướng dẫn kỹ thuật chi tiết
 ```
@@ -195,10 +222,10 @@ ESP32-S3-LoRa-Repeater-KWS/
 4. Thực hiện biên dịch và nạp firmware:
    ```bash
    # Dành cho trạm lặp Repeater
-   pio run -e node_repeater -t upload
+   pio run -e repeater_simple -t upload
 
    # Dành cho trạm AI Full
-   pio run -e node_full -t upload
+   pio run -e repeater_full -t upload
    ```
 5. Mở Serial Monitor để theo dõi hoạt động:
    ```bash
