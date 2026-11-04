@@ -15,6 +15,7 @@
 #define PKT_TYPE_PING     4
 #define PKT_TYPE_CHAT     5
 #define PKT_TYPE_CHAT_ACK 6
+#define PKT_TYPE_CMD      7
 
 // --- Packet Flags (QoS & Định dạng) ---
 #define PKT_FLAG_NONE     0x00
@@ -157,5 +158,25 @@ void lora_mesh_emitChatStatus(uint32_t client_id, uint16_t msg_id, const char* s
 
 /// Kiểm tra xem có tin nhắn Chat nào đang đợi ACK hay không
 bool lora_mesh_isChatPending();
+
+// ============================================================
+//  Lệnh điều khiển mạng LoRa Mesh (Network Command Service)
+// ============================================================
+
+/// Gửi lệnh điều khiển còi báo động qua LoRa Mesh (tới 1 repeater hoặc broadcast toàn mạng)
+/// @param targetId ID của Repeater đích (hoặc BROADCAST_ID 255 cho tất cả repeater)
+/// @param turnOn true để bật còi, false để tắt còi
+/// @param durationSec Thời gian bật còi tính bằng giây (mặc định 7s)
+/// @param requireAck Yêu cầu node đích phản hồi ACK (tự động false nếu targetId là BROADCAST_ID)
+/// @return true nếu gửi thành công
+bool lora_mesh_sendAlarmCommand(uint8_t targetId, bool turnOn, uint16_t durationSec = 7, bool requireAck = true);
+
+/// Xử lý chuỗi lệnh điều khiển còi nhận từ cổng UART của Gateway
+/// 4 lệnh chuẩn:
+///   1. Bật còi toàn bộ:       ALARM:ALL:ON
+///   2. Tắt còi toàn bộ:       ALARM:ALL:OFF
+///   3. Bật còi trạm chỉ định: ALARM:<id>:ON
+///   4. Tắt còi trạm chỉ định: ALARM:<id>:OFF
+bool lora_mesh_processAlarmCommand(const char* line);
 
 #endif // LORA_MESH_H

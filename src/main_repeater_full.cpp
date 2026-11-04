@@ -481,6 +481,8 @@ void loop() {
       if (serialCmdBuf.length() > 0) {
         if (serialCmdBuf.startsWith("CHAT:")) {
           lora_mesh_processChatCommand(serialCmdBuf.c_str());
+        } else if (serialCmdBuf.startsWith("ALARM:")) {
+          lora_mesh_processAlarmCommand(serialCmdBuf.c_str());
         } else if (serialCmdBuf.length() == 1) {
           char cmd = serialCmdBuf[0];
           switch (cmd) {

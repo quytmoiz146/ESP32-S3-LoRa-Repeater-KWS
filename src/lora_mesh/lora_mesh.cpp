@@ -7,6 +7,19 @@
 #include <esp_mac.h>
 
 // ============================================================
+//  Logging Configuration
+//  Trên Gateway (ROLE_GATEWAY): Chỉ xuất các sự kiện NDJSON chuẩn hóa cho PC / Dashboard.
+//  Tắt toàn bộ log text chi tiết ([RX], [TX], [CMD], [QoS]...) để không làm vỡ parser.
+// ============================================================
+#if defined(ROLE_GATEWAY)
+  #define MESH_LOG(...) ((void)0)
+  #define MESH_LOGLN(...) ((void)0)
+#else
+  #define MESH_LOG(...) Serial.printf(__VA_ARGS__)
+  #define MESH_LOGLN(...) Serial.println(__VA_ARGS__)
+#endif
+
+// ============================================================
 //  Node Identity & eFuse MAC Address
 // ============================================================
 static uint8_t g_device_mac[6] = {0};
@@ -182,8 +195,8 @@ void lora_mesh_checkBatteryProtection() {
 #if defined(PIN_VBAT_READ) && (PIN_VBAT_READ >= 0) && defined(BATTERY_CRITICAL_MV)
   uint16_t mv = lora_mesh_getBatteryMilliVolts();
   if (mv >= 2000 && mv <= BATTERY_CRITICAL_MV) {
-    Serial.printf("[WARN] Critical Battery (%dmV <= %dmV)! Entering Deep Sleep\n",
-                  mv, BATTERY_CRITICAL_MV);
+    MESH_LOG("[WARN] Critical Battery (%dmV <= %dmV)! Entering Deep Sleep\n",
+             mv, BATTERY_CRITICAL_MV);
     radio.sleep();
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     esp_sleep_enable_timer_wakeup(3600ULL * 1000000ULL); // Thức sau 1h kiểm tra sạc solar
@@ -241,6 +254,7 @@ static uint8_t findNextHop(uint8_t dest_id) {
 }
 
 void lora_mesh_printRoutingTable() {
+#if !defined(ROLE_GATEWAY)
   Serial.printf("\n--- Routing Table (%u routes) ---\n", route_count);
   if (route_count == 0) {
     Serial.println("  (Empty - awaiting mesh packets)");
@@ -254,6 +268,7 @@ void lora_mesh_printRoutingTable() {
     }
   }
   Serial.println("--------------------------------\n");
+#endif
 }
 
 // ============================================================
@@ -363,7 +378,7 @@ static bool waitBusy(uint32_t timeoutMs = 100) {
 }
 
 static void hardResetRadio() {
-  Serial.println("[WARN] SX1262 hardware reset...");
+  MESH_LOGLN("[WARN] SX1262 hardware reset...");
   digitalWrite(LORA_RST_PIN, LOW);
   delay(20);
   digitalWrite(LORA_RST_PIN, HIGH);
@@ -394,7 +409,7 @@ static void enterReceiveMode() {
   // Bật chế độ thu chu kỳ tiết kiệm điện động (Dynamic RXPS)
   state = radio.startReceiveDutyCycle(g_rxps_rx_us, g_rxps_sleep_us);
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[ERR] RX duty cycle fail: %d -> fallback continuous RX\n", state);
+    MESH_LOG("[ERR] RX duty cycle fail: %d -> fallback continuous RX\n", state);
     state = radio.startReceive();
   }
 #else
@@ -402,7 +417,7 @@ static void enterReceiveMode() {
 #endif
 
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[ERR] startReceive fail: %d -> attempting recovery\n", state);
+    MESH_LOG("[ERR] startReceive fail: %d -> attempting recovery\n", state);
     reinitRadio();
 
 #if defined(LORA_RX_DUTY_CYCLE_ENABLED) && (LORA_RX_DUTY_CYCLE_ENABLED > 0)
@@ -415,9 +430,9 @@ static void enterReceiveMode() {
 #endif
 
     if (state != RADIOLIB_ERR_NONE) {
-      Serial.printf("[ERR] Recovery fail: %d\n", state);
+      MESH_LOG("[ERR] Recovery fail: %d\n", state);
     } else {
-      Serial.println("[SYS] Recovery OK -> RX mode restored");
+      MESH_LOGLN("[SYS] Recovery OK -> RX mode restored");
     }
   }
 }
@@ -445,8 +460,8 @@ static void checkRxWatchdog() {
     }
     if (digitalRead(LORA_BUSY_PIN) == HIGH) {
       stats_rx_wd_resets++;
-      Serial.printf("[WD] BUSY stuck HIGH! Hard reset SX1262 (Resets: %lu)\n",
-                    (unsigned long)stats_rx_wd_resets);
+      MESH_LOG("[WD] BUSY stuck HIGH! Hard reset SX1262 (Resets: %lu)\n",
+               (unsigned long)stats_rx_wd_resets);
       reinitRadio();
       enterReceiveMode();
       last_rx_activity_ms = millis();
@@ -458,8 +473,8 @@ static void checkRxWatchdog() {
   uint16_t irq = radio.getIrqStatus();
   if (irq == 0xFFFF) {
     stats_rx_wd_resets++;
-    Serial.printf("[WD] Radio unresponsive (IRQ=0xFFFF)! Hard reset (Resets: %lu)\n",
-                  (unsigned long)stats_rx_wd_resets);
+    MESH_LOG("[WD] Radio unresponsive (IRQ=0xFFFF)! Hard reset (Resets: %lu)\n",
+             (unsigned long)stats_rx_wd_resets);
     reinitRadio();
     enterReceiveMode();
     last_rx_activity_ms = millis();
@@ -471,7 +486,7 @@ static void checkRxWatchdog() {
     last_rx_activity_ms = millis();
     enterReceiveMode();
 #if LORA_RX_DUTY_CYCLE_ENABLED
-    Serial.println("[WD] Periodic RXPS refresh — duty cycle resynced");
+    MESH_LOGLN("[WD] Periodic RXPS refresh — duty cycle resynced");
 #endif
   }
 #endif
@@ -498,12 +513,12 @@ static void waitChannelFreeWithCAD() {
   while (retries < LORA_CAD_MAX_RETRIES && lora_mesh_isChannelActive()) {
     retries++;
     uint32_t backoff = random(40, 120);
-    Serial.printf("[CAD] Channel busy, backoff %lums (%d/%d)\n",
-                  (unsigned long)backoff, retries, LORA_CAD_MAX_RETRIES);
+    MESH_LOG("[CAD] Channel busy, backoff %lums (%d/%d)\n",
+             (unsigned long)backoff, retries, LORA_CAD_MAX_RETRIES);
     delay(backoff);
   }
   if (retries >= LORA_CAD_MAX_RETRIES) {
-    Serial.println("[CAD] Channel busy after max retries -> forcing transmit");
+    MESH_LOGLN("[CAD] Channel busy after max retries -> forcing transmit");
   }
 #endif
 }
@@ -524,7 +539,7 @@ static int executeTransmit(MeshPacket &pkt) {
   int16_t state = radio.transmit((uint8_t*)&pkt, txLen);
   
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[ERR] LoRa TX fail: %d\n", state);
+    MESH_LOG("[ERR] LoRa TX fail: %d\n", state);
   }
   
   // Luôn luôn quay về chế độ RX — kể cả khi TX lỗi
@@ -547,7 +562,7 @@ static bool relayPacket(MeshPacket &pkt) {
   if (state == RADIOLIB_ERR_NONE) {
     return true;
   } else {
-    Serial.printf("[ERR] Relay TX fail: %d\n", state);
+    MESH_LOG("[ERR] Relay TX fail: %d\n", state);
     return false;
   }
 }
@@ -574,9 +589,9 @@ static void sendAckPacket(uint8_t dest_id, uint16_t ack_msg_id) {
   ackPkt.payload_len = 0;
 
   if (ackPkt.next_hop != BROADCAST_ID) {
-    Serial.printf("[TX] ACK #%u -> Node %u (NextHop:%u)\n", ack_msg_id, dest_id, ackPkt.next_hop);
+    MESH_LOG("[TX] ACK #%u -> Node %u (NextHop:%u)\n", ack_msg_id, dest_id, ackPkt.next_hop);
   } else {
-    Serial.printf("[TX] ACK #%u -> Node %u (Flood)\n", ack_msg_id, dest_id);
+    MESH_LOG("[TX] ACK #%u -> Node %u (Flood)\n", ack_msg_id, dest_id);
   }
   executeTransmit(ackPkt);
 }
@@ -615,10 +630,10 @@ static void transmitPendingChat() {
     lora_mesh_emitChatStatus(g_pending_chat.client_id, g_pending_chat.msg_id, "SENDING");
   }
 
-  Serial.printf("[CHAT] TX #%u -> Node %u (Attempt %d/%d, NextHop:%u): \"%s\"\n",
-                g_pending_chat.msg_id, g_pending_chat.target,
-                g_pending_chat.attempts, g_pending_chat.max_retries,
-                pkt.next_hop, g_pending_chat.text);
+  MESH_LOG("[CHAT] TX #%u -> Node %u (Attempt %d/%d, NextHop:%u): \"%s\"\n",
+           g_pending_chat.msg_id, g_pending_chat.target,
+           g_pending_chat.attempts, g_pending_chat.max_retries,
+           pkt.next_hop, g_pending_chat.text);
 
   int state = executeTransmit(pkt);
   if (state != RADIOLIB_ERR_NONE && g_pending_chat.attempts >= g_pending_chat.max_retries) {
@@ -632,8 +647,8 @@ static void tickPendingChat() {
   if (millis() - g_pending_chat.last_tx_ms < g_pending_chat.timeout_ms) return;
 
   if (g_pending_chat.attempts >= g_pending_chat.max_retries) {
-    Serial.printf("[CHAT] FAIL: No ACK for msg #%u after %d attempts!\n",
-                  g_pending_chat.msg_id, g_pending_chat.max_retries);
+    MESH_LOG("[CHAT] FAIL: No ACK for msg #%u after %d attempts!\n",
+             g_pending_chat.msg_id, g_pending_chat.max_retries);
     lora_mesh_emitChatStatus(g_pending_chat.client_id, g_pending_chat.msg_id, "FAILED", "NO_ACK");
     g_pending_chat.active = false;
   } else {
@@ -723,21 +738,21 @@ static void processIncomingPacket() {
 
   if (state != RADIOLIB_ERR_NONE) {
     if (state == RADIOLIB_ERR_CRC_MISMATCH) {
-      Serial.println("[DROP] CRC mismatch (noise / corrupted)");
+      MESH_LOGLN("[DROP] CRC mismatch (noise / corrupted)");
     } else {
-      Serial.printf("[ERR] Radio read fail: %d\n", state);
+      MESH_LOG("[ERR] Radio read fail: %d\n", state);
     }
     return;
   }
 
   // 1. Kiểm tra kích thước gói tối thiểu và Magic byte
   if (rxLen > 0 && rxLen < MESH_HEADER_SIZE) {
-    Serial.printf("[DROP] Short packet (%d < %d bytes)\n", (int)rxLen, (int)MESH_HEADER_SIZE);
+    MESH_LOG("[DROP] Short packet (%d < %d bytes)\n", (int)rxLen, (int)MESH_HEADER_SIZE);
     return;
   }
 
   if (pkt.magic != MESH_MAGIC) {
-    Serial.printf("[DROP] Invalid magic 0x%02X (exp: 0x%02X)\n", pkt.magic, MESH_MAGIC);
+    MESH_LOG("[DROP] Invalid magic 0x%02X (exp: 0x%02X)\n", pkt.magic, MESH_MAGIC);
     return;
   }
 
@@ -761,7 +776,7 @@ static void processIncomingPacket() {
     // Nếu là gói tin Chat gửi đích danh cho mình mà bị lặp (do gói ACK trước bị rơi trên đường truyền):
     // Bắt buộc phải phát lại gói ACK để giải phóng hàng đợi retry của bên gửi!
     if (pkt.msg_type == PKT_TYPE_CHAT && pkt.dest_id == MY_NODE_ID) {
-      Serial.printf("[CHAT] Duplicate msg #%u from Node %u -> Resending ACK\n", pkt.msg_id, pkt.src_id);
+      MESH_LOG("[CHAT] Duplicate msg #%u from Node %u -> Resending ACK\n", pkt.msg_id, pkt.src_id);
       sendAckPacket(pkt.src_id, pkt.msg_id);
     }
     return;
@@ -787,6 +802,9 @@ static void processIncomingPacket() {
   else if (pkt.msg_type == PKT_TYPE_CHAT) {
     typeStr = "CHAT";
   }
+  else if (pkt.msg_type == PKT_TYPE_CMD) {
+    typeStr = "CMD";
+  }
 
   char payloadInfo[64] = {0};
   if (pkt.flags & PKT_FLAG_BINARY) {
@@ -795,10 +813,12 @@ static void processIncomingPacket() {
       if (bin->alert_type == ALERT_HEARTBEAT) {
         typeStr = "HEARTBEAT";
         snprintf(payloadInfo, sizeof(payloadInfo), "Batt:%.2fV", bin->battery_mv / 1000.0f);
+#if !defined(ROLE_GATEWAY)
         if (pkt.dest_id == MY_NODE_ID || pkt.dest_id == GATEWAY_ID) {
           Serial.printf("{\"type\":\"HEARTBEAT\",\"src\":%u,\"battery\":%u,\"role\":\"REPEATER\",\"rssi\":%.1f,\"snr\":%.1f}\n",
                         pkt.src_id, bin->battery_mv, rssi, snr);
         }
+#endif
       } else {
         const char* alertName = (bin->alert_type == ALERT_BAWL) ? "BAWL" : 
                                 (bin->alert_type == ALERT_TEST) ? "TEST" : "ALERT";
@@ -819,13 +839,13 @@ static void processIncomingPacket() {
   }
 
   if (pkt.next_hop != BROADCAST_ID) {
-    Serial.printf(
+    MESH_LOG(
         "[RX] %s #%u | Src:%u->Dest:%u (NextHop:%u, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
         typeStr, pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.next_hop, pkt.sender_id, pkt.hop_count,
         rssi, snr, payloadInfo[0] ? payloadInfo : "none",
         formatPath(pkt).c_str());
   } else {
-    Serial.printf(
+    MESH_LOG(
         "[RX] %s #%u | Src:%u->Dest:%u (Flood, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
         typeStr, pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.sender_id, pkt.hop_count,
         rssi, snr, payloadInfo[0] ? payloadInfo : "none",
@@ -834,20 +854,25 @@ static void processIncomingPacket() {
 
   // 5. QoS: Xử lý khi nhận được gói ACK phản hồi
   if ((pkt.flags & PKT_FLAG_IS_ACK) || pkt.msg_type == PKT_TYPE_ACK || pkt.msg_type == PKT_TYPE_CHAT_ACK) {
-    // 5.1. Xác nhận ACK cho gói SOS / Data thông thường
+    // 5.1. Xác nhận ACK cho gói SOS / Data / CMD thông thường
     if (g_pending_ack.active && g_pending_ack.pkt.msg_id == pkt.msg_id) {
       uint32_t rtt = millis() - g_pending_ack.sent_at;
+      uint8_t pendingType = g_pending_ack.pkt.msg_type;
       g_pending_ack.active = false;
-      Serial.printf("[QoS] ✓ ACK CONFIRMED for msg #%u from Node %u (RTT: %lums)\n",
-                    pkt.msg_id, pkt.src_id, (unsigned long)rtt);
+      MESH_LOG("[QoS] ✓ ACK CONFIRMED for msg #%u from Node %u (RTT: %lums)\n",
+               pkt.msg_id, pkt.src_id, (unsigned long)rtt);
+      if (pendingType == PKT_TYPE_CMD) {
+        Serial.printf("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"msg_id\":%u,\"src\":%u,\"status\":\"ACK_CONFIRMED\",\"rtt_ms\":%lu}\n",
+                      pkt.msg_id, pkt.src_id, (unsigned long)rtt);
+      }
     }
     // 5.2. Xác nhận ACK cho gói Chat (yêu cầu từ chính đích cuối khớp target và msg_id)
     if (g_pending_chat.active && g_pending_chat.msg_id == pkt.msg_id && g_pending_chat.target == pkt.src_id) {
       uint32_t rtt = millis() - g_pending_chat.last_tx_ms;
       g_pending_chat.active = false;
       lora_mesh_emitChatStatus(g_pending_chat.client_id, pkt.msg_id, "DELIVERED");
-      Serial.printf("[CHAT] ✓ DELIVERED msg #%u to Node %u (RTT: %lums)\n",
-                    pkt.msg_id, pkt.src_id, (unsigned long)rtt);
+      MESH_LOG("[CHAT] ✓ DELIVERED msg #%u to Node %u (RTT: %lums)\n",
+               pkt.msg_id, pkt.src_id, (unsigned long)rtt);
     }
     // Gói ACK đã tới đích cuối thì không relay tiếp
     if (pkt.dest_id == MY_NODE_ID) return;
@@ -863,6 +888,49 @@ static void processIncomingPacket() {
     }
     // Phát ACK xác nhận cho bên gửi
     sendAckPacket(pkt.src_id, pkt.msg_id);
+    if (pkt.dest_id == MY_NODE_ID) return; // Dừng relay
+  }
+
+  // 6.2. Xử lý lệnh điều khiển ngoại vi mạng LoRa Mesh (ALARM, v.v.)
+  if (pkt.msg_type == PKT_TYPE_CMD && (pkt.dest_id == MY_NODE_ID || pkt.dest_id == BROADCAST_ID)) {
+    MESH_LOG("[CMD] Recv network command #%u from Node %u -> Dest %u: \"%s\"\n",
+             pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.payload);
+
+    if (strncmp(pkt.payload, "ALARM:", 6) == 0) {
+      const char* sub = pkt.payload + 6;
+      if (strncasecmp(sub, "ON", 2) == 0) {
+        uint16_t sec = 7;
+        const char* secStr = strchr(sub, ':');
+        if (secStr) {
+          sec = (uint16_t)strtoul(secStr + 1, nullptr, 10);
+          if (sec == 0) sec = 7;
+        }
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
+        pinMode(ALARM_PIN, OUTPUT);
+        digitalWrite(ALARM_PIN, HIGH);
+        g_alarm_end_ms = millis() + (sec * 1000UL);
+        MESH_LOG("[CMD] ✓ ALARM TURNED ON for %u seconds (ordered by Node %u)\n", sec, pkt.src_id);
+#else
+        MESH_LOGLN("[CMD] Device has no alarm hardware (ALARM_PIN not defined)");
+#endif
+        Serial.printf("{\"type\":\"ALARM_ACTION\",\"action\":\"ON\",\"duration\":%u,\"by\":%u}\n", sec, pkt.src_id);
+      } else if (strncasecmp(sub, "OFF", 3) == 0) {
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
+        digitalWrite(ALARM_PIN, LOW);
+        g_alarm_end_ms = 0;
+        MESH_LOG("[CMD] ✓ ALARM TURNED OFF (ordered by Node %u)\n", pkt.src_id);
+#else
+        MESH_LOGLN("[CMD] Device has no alarm hardware (ALARM_PIN not defined)");
+#endif
+        Serial.printf("{\"type\":\"ALARM_ACTION\",\"action\":\"OFF\",\"by\":%u}\n", pkt.src_id);
+      }
+    }
+
+    // Nếu lệnh gửi đích danh và yêu cầu ACK -> phản hồi ACK cho bên gửi
+    if ((pkt.flags & PKT_FLAG_ACK_REQ) && (pkt.dest_id == MY_NODE_ID)) {
+      sendAckPacket(pkt.src_id, pkt.msg_id);
+    }
+
     if (pkt.dest_id == MY_NODE_ID) return; // Dừng relay
   }
 
@@ -884,8 +952,8 @@ static void processIncomingPacket() {
   // thì BỎ QUA không relay để tránh bão mạng và tiết kiệm pin toàn mạng!
   if (pkt.dest_id != BROADCAST_ID && pkt.next_hop != BROADCAST_ID) {
     if (pkt.next_hop != MY_NODE_ID) {
-      Serial.printf("[SKIP] %s #%u: Unicast targeted to NextHop %u (self is %u)\n",
-                    typeStr, pkt.msg_id, pkt.next_hop, MY_NODE_ID);
+      MESH_LOG("[SKIP] %s #%u: Unicast targeted to NextHop %u (self is %u)\n",
+               typeStr, pkt.msg_id, pkt.next_hop, MY_NODE_ID);
       return;
     }
   }
@@ -893,14 +961,14 @@ static void processIncomingPacket() {
 
   // 7. Hop Limit — Giới hạn số hop (chống flood bão mạng)
   if (pkt.hop_count >= 7) {
-    Serial.printf("[DROP] %s #%u: Hop limit reached (%d hops)\n", typeStr, pkt.msg_id, pkt.hop_count);
+    MESH_LOG("[DROP] %s #%u: Hop limit reached (%d hops)\n", typeStr, pkt.msg_id, pkt.hop_count);
     return;
   }
 
   // 8. Loop prevention — chống vòng lặp kín
   for (int i = 0; i < pkt.hop_count && i < MAX_PATH_LEN; i++) {
     if (pkt.path[i] == MY_NODE_ID) {
-      Serial.printf("[DROP] %s #%u: Loop detected (self in path)\n", typeStr, pkt.msg_id);
+      MESH_LOG("[DROP] %s #%u: Loop detected (self in path)\n", typeStr, pkt.msg_id);
       return;
     }
   }
@@ -922,14 +990,14 @@ static void processIncomingPacket() {
   if (relayPacket(pkt)) {
     stats_relayed++;
     if (pkt.next_hop != BROADCAST_ID) {
-      Serial.printf("[RELAY] %s #%u (Unicast -> NextHop:%u) -> Hop %u OK (Path:%s)\n",
-                    typeStr, pkt.msg_id, pkt.next_hop, pkt.hop_count, formatPath(pkt).c_str());
+      MESH_LOG("[RELAY] %s #%u (Unicast -> NextHop:%u) -> Hop %u OK (Path:%s)\n",
+               typeStr, pkt.msg_id, pkt.next_hop, pkt.hop_count, formatPath(pkt).c_str());
     } else {
-      Serial.printf("[RELAY] %s #%u (Flood) -> Hop %u OK (Path:%s)\n",
-                    typeStr, pkt.msg_id, pkt.hop_count, formatPath(pkt).c_str());
+      MESH_LOG("[RELAY] %s #%u (Flood) -> Hop %u OK (Path:%s)\n",
+               typeStr, pkt.msg_id, pkt.hop_count, formatPath(pkt).c_str());
     }
   } else {
-    Serial.printf("[RELAY] %s #%u -> Hop %u FAILED\n", typeStr, pkt.msg_id, pkt.hop_count);
+    MESH_LOG("[RELAY] %s #%u -> Hop %u FAILED\n", typeStr, pkt.msg_id, pkt.hop_count);
   }
 }
 
@@ -939,7 +1007,7 @@ static void processIncomingPacket() {
 static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *payload,
                                uint8_t payloadLen, uint8_t destId, bool requireAck) {
   if (loraMutex && xSemaphoreTake(loraMutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-    Serial.println("[ERR] TX fail: Radio busy (mutex timeout)");
+    MESH_LOGLN("[ERR] TX fail: Radio busy (mutex timeout)");
     return false;
   }
 
@@ -971,7 +1039,9 @@ static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *paylo
   markPacketSeen(pkt.src_id, pkt.msg_id);
 
   const char *typeStr = (msgType == PKT_TYPE_SOS) ? "SOS" :
-                        (msgType == PKT_TYPE_ACK) ? "ACK" : "DATA";
+                        (msgType == PKT_TYPE_ACK) ? "ACK" :
+                        (msgType == PKT_TYPE_CHAT) ? "CHAT" :
+                        (msgType == PKT_TYPE_CMD) ? "CMD" : "DATA";
   char payloadSummary[48] = {0};
   if (flags & PKT_FLAG_BINARY) {
     if (payloadLen >= sizeof(SosBinaryPayload)) {
@@ -1006,20 +1076,20 @@ static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *paylo
   if (state == RADIOLIB_ERR_NONE) {
     if (msgType == PKT_TYPE_SOS) stats_tx_sos++;
     if (pkt.next_hop != BROADCAST_ID) {
-      Serial.printf("[TX] %s #%u -> Dest:%u (NextHop:%u%s) | %s | OK\n",
-                    typeStr, pkt.msg_id, destId, pkt.next_hop,
-                    requireAck ? ", wait ACK" : "",
-                    payloadSummary[0] ? payloadSummary : "len:0");
+      MESH_LOG("[TX] %s #%u -> Dest:%u (NextHop:%u%s) | %s | OK\n",
+               typeStr, pkt.msg_id, destId, pkt.next_hop,
+               requireAck ? ", wait ACK" : "",
+               payloadSummary[0] ? payloadSummary : "len:0");
     } else {
-      Serial.printf("[TX] %s #%u -> Dest:%u (Flood%s) | %s | OK\n",
-                    typeStr, pkt.msg_id, destId,
-                    requireAck ? ", wait ACK" : "",
-                    payloadSummary[0] ? payloadSummary : "len:0");
+      MESH_LOG("[TX] %s #%u -> Dest:%u (Flood%s) | %s | OK\n",
+               typeStr, pkt.msg_id, destId,
+               requireAck ? ", wait ACK" : "",
+               payloadSummary[0] ? payloadSummary : "len:0");
     }
     if (loraMutex) xSemaphoreGive(loraMutex);
     return true;
   } else {
-    Serial.printf("[TX] %s #%u -> Dest:%u FAILED (%d)\n", typeStr, pkt.msg_id, destId, state);
+    MESH_LOG("[TX] %s #%u -> Dest:%u FAILED (%d)\n", typeStr, pkt.msg_id, destId, state);
     if (requireAck) g_pending_ack.active = false;
     if (loraMutex) xSemaphoreGive(loraMutex);
     return false;
@@ -1136,7 +1206,7 @@ bool lora_mesh_init() {
   }
 
   if (state != RADIOLIB_ERR_NONE) {
-    Serial.printf("[ERR] SX1262 init failed: %d\n", state);
+    MESH_LOG("[ERR] SX1262 init failed: %d\n", state);
     return false;
   }
 
@@ -1184,12 +1254,16 @@ void lora_mesh_loop() {
         g_pending_ack.retries_left--;
         g_pending_ack.sent_at = millis();
         g_pending_ack.pkt.sender_id = MY_NODE_ID;
-        Serial.printf("[QoS] ACK Timeout msg #%u -> Retrying (%d retries left)...\n",
-                      g_pending_ack.pkt.msg_id, g_pending_ack.retries_left);
+        MESH_LOG("[QoS] ACK Timeout msg #%u -> Retrying (%d retries left)...\n",
+                 g_pending_ack.pkt.msg_id, g_pending_ack.retries_left);
         executeTransmit(g_pending_ack.pkt);
       } else {
-        Serial.printf("[QoS] FAIL: No ACK received for msg #%u!\n",
-                      g_pending_ack.pkt.msg_id);
+        MESH_LOG("[QoS] FAIL: No ACK received for msg #%u!\n",
+                 g_pending_ack.pkt.msg_id);
+        if (g_pending_ack.pkt.msg_type == PKT_TYPE_CMD) {
+          Serial.printf("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"msg_id\":%u,\"target\":%u,\"status\":\"FAILED\",\"reason\":\"NO_ACK\"}\n",
+                        g_pending_ack.pkt.msg_id, g_pending_ack.pkt.dest_id);
+        }
         g_pending_ack.active = false;
       }
     }
@@ -1208,7 +1282,8 @@ void lora_mesh_loop() {
     lora_mesh_checkBatteryProtection();
   }
 
-  // 5. Heartbeat log mỗi 30 giây
+#if !defined(ROLE_GATEWAY)
+  // 5. Heartbeat log mỗi 30 giây (chỉ hiển thị trên Repeater / Node)
   static unsigned long lastHeartbeat = 0;
   if (millis() - lastHeartbeat >= 30000) {
     lastHeartbeat = millis();
@@ -1225,6 +1300,7 @@ void lora_mesh_loop() {
         (unsigned long)stats_rx_wd_resets,
         (unsigned long)(ESP.getFreeHeap() / 1024));
   }
+#endif
 
   xSemaphoreGive(loraMutex);
 }
@@ -1300,4 +1376,99 @@ bool lora_mesh_light_sleep(uint32_t timeoutMs) {
   }
   return false;
 #endif
+}
+
+// ============================================================
+//  Lệnh điều khiển mạng LoRa Mesh (Network Command Service)
+// ============================================================
+
+bool lora_mesh_sendAlarmCommand(uint8_t targetId, bool turnOn, uint16_t durationSec, bool requireAck) {
+  char payload[32];
+  if (turnOn) {
+    snprintf(payload, sizeof(payload), "ALARM:ON:%u", durationSec);
+  } else {
+    snprintf(payload, sizeof(payload), "ALARM:OFF");
+  }
+
+  uint8_t flags = PKT_FLAG_NONE;
+  if (requireAck && targetId != BROADCAST_ID) {
+    flags |= PKT_FLAG_ACK_REQ;
+  } else {
+    requireAck = false;
+  }
+
+  MESH_LOG("[CMD] Sending ALARM command to Target %u: \"%s\" (reqAck: %d)\n",
+           targetId, payload, requireAck);
+
+  return sendPacketInternal(PKT_TYPE_CMD, flags, payload, strlen(payload), targetId, requireAck);
+}
+
+bool lora_mesh_processAlarmCommand(const char* line) {
+  if (!line || strncmp(line, "ALARM:", 6) != 0) {
+    Serial.println("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"status\":\"FAILED\",\"reason\":\"BAD_FORMAT\"}");
+    return false;
+  }
+
+  const char* p = line + 6;
+  uint8_t target = BROADCAST_ID;
+  bool turnOn = false;
+  uint16_t durationSec = 7;
+  bool requireAck = true;
+
+  // 1. Lệnh toàn bộ Repeater: ALARM:ALL:ON, ALARM:ALL:OFF (hoặc phím tắt ALARM:ON, ALARM:OFF)
+  if (strncasecmp(p, "ALL:", 4) == 0) {
+    target = BROADCAST_ID;
+    const char* action = p + 4;
+    if (strncasecmp(action, "ON", 2) == 0) {
+      turnOn = true;
+      const char* pSec = strchr(action, ':');
+      if (pSec) durationSec = (uint16_t)strtoul(pSec + 1, nullptr, 10);
+    } else if (strncasecmp(action, "OFF", 3) == 0) {
+      turnOn = false;
+    } else {
+      Serial.println("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"status\":\"FAILED\",\"reason\":\"BAD_ACTION\"}");
+      return false;
+    }
+  } else if (strncasecmp(p, "ON", 2) == 0) {
+    target = BROADCAST_ID;
+    turnOn = true;
+    const char* pSec = strchr(p, ':');
+    if (pSec) durationSec = (uint16_t)strtoul(pSec + 1, nullptr, 10);
+  } else if (strncasecmp(p, "OFF", 3) == 0) {
+    target = BROADCAST_ID;
+    turnOn = false;
+  } else {
+    // 2. Lệnh Repeater chỉ định: ALARM:<id>:ON, ALARM:<id>:OFF
+    char* endPtr = nullptr;
+    unsigned long idVal = strtoul(p, &endPtr, 10);
+    if (endPtr == p || *endPtr != ':') {
+      Serial.println("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"status\":\"FAILED\",\"reason\":\"BAD_TARGET_ID\"}");
+      return false;
+    }
+    target = (uint8_t)idVal;
+    const char* action = endPtr + 1;
+    if (strncasecmp(action, "ON", 2) == 0) {
+      turnOn = true;
+      const char* pSec = strchr(action, ':');
+      if (pSec) durationSec = (uint16_t)strtoul(pSec + 1, nullptr, 10);
+    } else if (strncasecmp(action, "OFF", 3) == 0) {
+      turnOn = false;
+    } else {
+      Serial.println("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"status\":\"FAILED\",\"reason\":\"BAD_ACTION\"}");
+      return false;
+    }
+  }
+
+  if (target == BROADCAST_ID) {
+    requireAck = false;
+  }
+
+  Serial.printf("{\"type\":\"ALARM_CMD_SENT\",\"target\":%u,\"action\":\"%s\",\"duration\":%u}\n",
+                target, turnOn ? "ON" : "OFF", turnOn ? durationSec : 0);
+
+  bool ok = lora_mesh_sendAlarmCommand(target, turnOn, durationSec, requireAck);
+  if (!ok) {
+    Serial.printf("{\"type\":\"CMD_STATUS\",\"cmd\":\"ALARM\",\"target\":%u,\"status\":\"FAILED\",\"reason\":\"TX_ERROR\"}\n", target);
+  }
+  return ok;
 }
