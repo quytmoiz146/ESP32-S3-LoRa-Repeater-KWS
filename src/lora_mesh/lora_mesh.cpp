@@ -60,7 +60,9 @@ static SX1262 *radio_ptr = nullptr;
 #define radio (*radio_ptr)
 
 static SemaphoreHandle_t loraMutex = NULL;
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
 extern volatile unsigned long g_alarm_end_ms;
+#endif
 
 // ============================================================
 //  ISR — Cờ báo có gói tin đến
@@ -125,8 +127,10 @@ uint32_t lora_mesh_getWatchdogResets() {
 // ============================================================
 //  Dynamic RXPS Timings (MeshCore Derivation Formula)
 // ============================================================
+#if defined(LORA_RX_DUTY_CYCLE_ENABLED) && (LORA_RX_DUTY_CYCLE_ENABLED > 0)
 static uint32_t g_rxps_rx_us = LORA_RX_DUTY_CYCLE_RX_US;
 static uint32_t g_rxps_sleep_us = LORA_RX_DUTY_CYCLE_SLEEP_US;
+#endif
 
 void lora_mesh_calcRxpsTimings(uint8_t level, uint8_t sf, float bw, uint8_t preamble, uint32_t* rx_us, uint32_t* sleep_us) {
   // 1. T_sym (us) = (2^SF / BW_kHz) * 1000
@@ -168,11 +172,14 @@ uint16_t lora_mesh_getBatteryMilliVolts() {
   }
   uint16_t mv = (uint16_t)((sum / 4.0f) * BATTERY_DIVIDER_RATIO);
   if (mv > 2000 && mv < 5000) return mv;
+  return 3700; // Mặc định 3.7V nếu ngoài dải đo
+#else
+  return 5000; // Mặc định 5.0V USB (Gateway hoặc thiết bị cấp nguồn liên tục)
 #endif
-  return 3700; // Mặc định 3.7V nếu chưa gắn chân đọc ADC
 }
 
 void lora_mesh_checkBatteryProtection() {
+#if defined(PIN_VBAT_READ) && (PIN_VBAT_READ >= 0) && defined(BATTERY_CRITICAL_MV)
   uint16_t mv = lora_mesh_getBatteryMilliVolts();
   if (mv >= 2000 && mv <= BATTERY_CRITICAL_MV) {
     Serial.printf("[WARN] Critical Battery (%dmV <= %dmV)! Entering Deep Sleep\n",
@@ -182,6 +189,7 @@ void lora_mesh_checkBatteryProtection() {
     esp_sleep_enable_timer_wakeup(3600ULL * 1000000ULL); // Thức sau 1h kiểm tra sạc solar
     esp_deep_sleep_start();
   }
+#endif
 }
 
 // ============================================================
@@ -382,7 +390,7 @@ static bool reinitRadio() {
 static void enterReceiveMode() {
   int16_t state = RADIOLIB_ERR_NONE;
 
-#if LORA_RX_DUTY_CYCLE_ENABLED
+#if defined(LORA_RX_DUTY_CYCLE_ENABLED) && (LORA_RX_DUTY_CYCLE_ENABLED > 0)
   // Bật chế độ thu chu kỳ tiết kiệm điện động (Dynamic RXPS)
   state = radio.startReceiveDutyCycle(g_rxps_rx_us, g_rxps_sleep_us);
   if (state != RADIOLIB_ERR_NONE) {
@@ -397,7 +405,7 @@ static void enterReceiveMode() {
     Serial.printf("[ERR] startReceive fail: %d -> attempting recovery\n", state);
     reinitRadio();
 
-#if LORA_RX_DUTY_CYCLE_ENABLED
+#if defined(LORA_RX_DUTY_CYCLE_ENABLED) && (LORA_RX_DUTY_CYCLE_ENABLED > 0)
     state = radio.startReceiveDutyCycle(g_rxps_rx_us, g_rxps_sleep_us);
     if (state != RADIOLIB_ERR_NONE) {
       state = radio.startReceive();
@@ -766,7 +774,9 @@ static void processIncomingPacket() {
   const char *typeStr = "DATA";
   if (pkt.msg_type == PKT_TYPE_SOS) {
     typeStr = "SOS";
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
     g_alarm_end_ms = millis() + 7000; // Bật còi 7s khi nhận được SOS (cả repeater cũng kêu)
+#endif
   }
   else if (pkt.msg_type == PKT_TYPE_ACK || pkt.msg_type == PKT_TYPE_CHAT_ACK) {
     typeStr = "ACK";
@@ -1080,6 +1090,10 @@ bool lora_mesh_init() {
   gpio_reset_pin((gpio_num_t)LORA_DIO1_PIN);
   pinMode(LORA_DIO1_PIN, INPUT_PULLDOWN);
 #endif
+#if defined(LORA_DIO3_PIN) && (LORA_DIO3_PIN >= 0)
+  gpio_reset_pin((gpio_num_t)LORA_DIO3_PIN);
+  pinMode(LORA_DIO3_PIN, INPUT);
+#endif
 
   // Hardware reset
   pinMode(LORA_CS_PIN, OUTPUT);
@@ -1104,7 +1118,7 @@ bool lora_mesh_init() {
   }
 
   // Tự động tính toán chu kỳ RXPS động từ SF và Bandwidth
-#if LORA_RX_DUTY_CYCLE_ENABLED
+#if defined(LORA_RX_DUTY_CYCLE_ENABLED) && (LORA_RX_DUTY_CYCLE_ENABLED > 0)
   lora_mesh_calcRxpsTimings(LORA_RXPS_LEVEL, LORA_SPREADING_FACTOR, LORA_BANDWIDTH,
                             LORA_PREAMBLE_LEN, &g_rxps_rx_us, &g_rxps_sleep_us);
 #endif
@@ -1219,7 +1233,7 @@ void lora_mesh_loop() {
 //  Light Sleep — Giảm dòng tiêu thụ MCU xuống ~1.5 - 2mA
 // ============================================================
 bool lora_mesh_light_sleep(uint32_t timeoutMs) {
-#if LORA_LIGHT_SLEEP_ENABLED
+#if defined(LORA_LIGHT_SLEEP_ENABLED) && (LORA_LIGHT_SLEEP_ENABLED > 0)
   // Không ngủ nếu có gói tin đang chờ hoặc chân DIO1 đang báo mức cao
   if (rx_packet_ready || digitalRead(LORA_DIO1_PIN) == HIGH) {
     return false;

@@ -1,14 +1,13 @@
 // ============================================================
 //  LORA NODE CẦM TAY — Thiết bị Balo / Hiện trường (Role Node)
-//  Kết nối Smartphone qua BLE (Nordic UART Service)
-//  Chạy LoRa Mesh + BLE + Chat hai chiều
+//  Chức năng chuyên biệt:
+//  1. Kết nối Smartphone qua Bluetooth Low Energy (BLE NUS)
+//  2. Nhắn tin hai chiều (Chat) với Gateway và các Node khác qua LoRa Mesh
 // ============================================================
 #include "config.h"
 #include <Arduino.h>
 #include "lora_mesh/lora_mesh.h"
 #include "ble/BleMeshLink.h"
-
-volatile unsigned long g_alarm_end_ms = 0;
 
 static void onChatReceived(uint8_t src_id, uint8_t dest_id, const char* text, uint16_t msg_id, uint8_t hops, float rssi, float snr) {
   // Gửi sự kiện CHAT lên Mobile App qua BLE
@@ -35,12 +34,6 @@ static void onChatStatus(uint32_t client_id, uint16_t msg_id, const char* status
 }
 
 void setup() {
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, LOW);
-
-  pinMode(ALARM_PIN, OUTPUT);
-  digitalWrite(ALARM_PIN, LOW);
-
   Serial.begin(115200);
 
   unsigned long startWait = millis();
@@ -49,19 +42,19 @@ void setup() {
   }
   delay(200);
 
+  // 1. Khởi tạo sóng vô tuyến LoRa SX1262
   bool loraOk = lora_mesh_init();
-  if (loraOk) {
-    digitalWrite(LED, HIGH);
-  }
 
-  // Khởi tạo BLE Nordic UART Service
+  // 2. Khởi tạo dịch vụ BLE Nordic UART Service (NUS)
   char bleName[32];
-  snprintf(bleName, sizeof(bleName), "SOS-Node-%02X", MY_NODE_ID);
+  snprintf(bleName, sizeof(bleName), "%s%02X", BLE_DEVICE_NAME_PREFIX, MY_NODE_ID);
   bool bleOk = bleMeshInit(bleName);
 
+  // 3. Đăng ký hàm nhận tin nhắn và trạng thái gửi
   lora_mesh_setChatCallback(onChatReceived);
   lora_mesh_setChatStatusCallback(onChatStatus);
 
+  // 4. Xuất log thông tin cấu hình qua UART
   Serial.println("\n==================================================================");
   Serial.printf("  ESP32-S3 LORA NODE | ID: %d (0x%02X) | %s | BLE: %s\n", 
                 MY_NODE_ID, MY_NODE_ID, loraOk ? "READY" : "LORA FAIL",
@@ -70,26 +63,18 @@ void setup() {
                 lora_mesh_getMacString(), LORA_FREQUENCY, LORA_SPREADING_FACTOR,
                 LORA_BANDWIDTH, LORA_TX_POWER);
   Serial.println("  Interface: BLE Nordic UART + USB Serial");
-  Serial.println("  App Command: CHAT:<client_id>:<target_node>:<utf8_text>\\n");
+  Serial.println("  Command: CHAT:<client_id>:<target_node>:<utf8_text>\\n");
   Serial.println("==================================================================");
 }
 
 static String serialBuffer = "";
 
 void loop() {
-  // Xử lý báo động
-  if (g_alarm_end_ms > 0) {
-    if (millis() < g_alarm_end_ms) {
-      digitalWrite(ALARM_PIN, HIGH);
-    } else {
-      digitalWrite(ALARM_PIN, LOW);
-      g_alarm_end_ms = 0;
-    }
-  }
-
+  // 1. Tiếp nhận và định tuyến gói tin qua mạng LoRa Mesh
   lora_mesh_loop();
 
-  // 1. Kiểm tra lệnh nhận từ Mobile App qua BLE
+  // 2. Kiểm tra lệnh gửi tin nhắn nhận từ Mobile App qua BLE
+  //    Cú pháp: CHAT:<client_id>:<target_node>:<utf8_text>\n
   char bleCmd[128];
   if (bleMeshTakeCommand(bleCmd, sizeof(bleCmd))) {
     Serial.printf("[BLE] Recv: \"%s\"\n", bleCmd);
@@ -98,7 +83,7 @@ void loop() {
     }
   }
 
-  // 2. Kiểm tra lệnh từ Serial console
+  // 3. Hỗ trợ gửi lệnh thử nghiệm qua cổng Serial máy tính
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
@@ -119,4 +104,3 @@ void loop() {
 
   delay(2);
 }
-

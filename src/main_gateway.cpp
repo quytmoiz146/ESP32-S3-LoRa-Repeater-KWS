@@ -1,31 +1,17 @@
 // ============================================================
-//  LORA GATEWAY — Trạm cổng trung tâm chỉ huy (Role Gateway)
-//  Cắm USB vào máy tính, giao tiếp qua Serial NDJSON (115200 baud)
-//  Không cần BLE — Thuần LoRa Mesh + USB Serial
+//  LORA GATEWAY — Trạm Cổng Trung Tâm Chỉ Huy (Role Gateway)
+//  Chức năng chuyên biệt:
+//  1. Thu / phát gói tin qua mạng vô tuyến LoRa Mesh
+//  2. Hiển thị log trạng thái và dữ liệu qua UART (Chuẩn NDJSON)
+//  3. Gửi / nhận tin nhắn Chat hai chiều với các Node hiện trường
 // ============================================================
 #include "config.h"
 #include <Arduino.h>
 #include "lora_mesh/lora_mesh.h"
 
-volatile unsigned long g_alarm_end_ms = 0;
-
-static void onChatReceived(uint8_t src_id, uint8_t dest_id, const char* text, uint16_t msg_id, uint8_t hops, float rssi, float snr) {
-  // Đã được lora_mesh tự động format NDJSON ra Serial
-  // Có thể gắn thêm còi hoặc xử lý giao diện phụ tại đây nếu cần
-}
-
-static void onChatStatus(uint32_t client_id, uint16_t msg_id, const char* status, const char* reason) {
-  // Đã được lora_mesh tự động format NDJSON CHAT_STATUS ra Serial
-}
-
 void setup() {
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, LOW);
-
-  pinMode(ALARM_PIN, OUTPUT);
-  digitalWrite(ALARM_PIN, LOW);
-
-  Serial.begin(115200);
+  // 1. Khởi tạo cổng Serial giao tiếp PC (115200 baud)
+  Serial.begin(GATEWAY_SERIAL_BAUD);
 
   unsigned long startWait = millis();
   while (!Serial && (millis() - startWait < 2000)) {
@@ -33,14 +19,10 @@ void setup() {
   }
   delay(200);
 
+  // 2. Khởi tạo phần cứng LoRa SX1262 với sơ đồ chân riêng của Gateway
   bool loraOk = lora_mesh_init();
-  if (loraOk) {
-    digitalWrite(LED, HIGH);
-  }
 
-  lora_mesh_setChatCallback(onChatReceived);
-  lora_mesh_setChatStatusCallback(onChatStatus);
-
+  // 3. Xuất log thông tin cấu hình qua UART
   Serial.println("\n==================================================================");
   Serial.printf("  ESP32-S3 LORA GATEWAY | Node ID: %d (0x%02X) | %s\n", 
                 MY_NODE_ID, MY_NODE_ID, loraOk ? "READY" : "INIT FAILED");
@@ -50,6 +32,8 @@ void setup() {
   Serial.println("  Interface: PC USB Serial (115200) — Format: NDJSON");
   Serial.println("  PC Command: CHAT:<client_id>:<target_node>:<utf8_text>\\n");
   Serial.println("==================================================================");
+
+  // 4. Phát sự kiện sẵn sàng dạng JSON cho phần mềm PC
   if (loraOk) {
     Serial.println("{\"type\":\"GATEWAY_READY\",\"node_id\":0,\"mac\":\"" + String(lora_mesh_getMacString()) + "\"}\n");
   }
@@ -58,19 +42,12 @@ void setup() {
 static String serialBuffer = "";
 
 void loop() {
-  // Xử lý báo động
-  if (g_alarm_end_ms > 0) {
-    if (millis() < g_alarm_end_ms) {
-      digitalWrite(ALARM_PIN, HIGH);
-    } else {
-      digitalWrite(ALARM_PIN, LOW);
-      g_alarm_end_ms = 0;
-    }
-  }
-
+  // 1. Luồng tiếp nhận & chuyển tiếp mọi thông tin qua LoRa Mesh (SOS, Chat, Heartbeat, ACK...)
+  //    Tự động giải mã và xuất dữ liệu NDJSON ra cổng UART cho phần mềm PC
   lora_mesh_loop();
 
-  // Đọc lệnh từ Serial (chuỗi lệnh CHAT:...)
+  // 2. Luồng đọc lệnh gửi tin nhắn từ PC qua UART
+  //    Cú pháp: CHAT:<client_id>:<target_node>:<utf8_text>\n
   while (Serial.available()) {
     char c = (char)Serial.read();
     if (c == '\r') continue;
@@ -91,4 +68,3 @@ void loop() {
 
   delay(2);
 }
-
