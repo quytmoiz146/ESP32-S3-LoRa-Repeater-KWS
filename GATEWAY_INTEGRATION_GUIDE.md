@@ -136,7 +136,9 @@ build_src_filter =
 
 Giao tiếp giữa Gateway và Máy tính tuân theo nguyên tắc: **Mỗi thông điệp là một dòng JSON hợp lệ kết thúc bằng ký tự xuống dòng `\n`**.
 
-### 4.1. Lệnh từ Máy Tính gửi xuống Gateway (Gửi tin nhắn đi)
+### 4.1. Lệnh từ Máy Tính gửi xuống Gateway
+
+#### 1. Lệnh gửi tin nhắn Chat tới Node:
 ```text
 CHAT:<client_id>:<target_node>:<utf8_text>\n
 ```
@@ -148,6 +150,22 @@ CHAT:<client_id>:<target_node>:<utf8_text>\n
 ```text
 CHAT:2001:146:Đội 1 lập tức rút về phía Đông do lũ quét\n
 ```
+
+#### 2. Lệnh điều khiển bật / tắt còi báo động tại Trạm Lặp (Gồm đúng 4 lệnh chuẩn):
+
+| STT | Cú pháp lệnh | Chức năng thực hiện | Cơ chế truyền nhận |
+| :---: | :--- | :--- | :--- |
+| **1** | `ALARM:ALL:ON\n` | **Bật còi toàn bộ** các Trạm Lặp Repeater | Broadcast toàn mạng, thời lượng 7s |
+| **2** | `ALARM:ALL:OFF\n` | **Tắt còi toàn bộ** các Trạm Lặp Repeater | Broadcast toàn mạng, ngắt còi lập tức |
+| **3** | `ALARM:<id>:ON\n` | **Bật còi tại Repeater chỉ định** | Unicast đích danh + Chờ ACK phản hồi |
+| **4** | `ALARM:<id>:OFF\n` | **Tắt còi tại Repeater chỉ định** | Unicast đích danh + Chờ ACK phản hồi |
+
+*Ví dụ thực tế:*
+* `ALARM:ALL:ON\n`: Kích hoạt còi báo động trên toàn bộ mạng lưới Repeater.
+* `ALARM:ALL:OFF\n`: Tắt còi trên toàn bộ mạng lưới ngay lập tức.
+* `ALARM:2:ON\n`: Bật còi riêng tại Repeater có ID là `2`.
+* `ALARM:2:OFF\n`: Tắt còi tại Repeater ID `2`.
+*(Hệ thống vẫn hỗ trợ thêm tham số thời lượng tùy chọn nếu cần, ví dụ: `ALARM:ALL:ON:15` hoặc `ALARM:2:ON:10`).*
 
 ### 4.2. Các sự kiện Gateway xuất lên Máy Tính (JSON Events)
 
@@ -203,17 +221,30 @@ CHAT:2001:146:Đội 1 lập tức rút về phía Đông do lũ quét\n
   {"type":"CHAT_STATUS","client_id":2001,"msg_id":315,"status":"FAILED","reason":"NO_ACK"}
   ```
 
-#### 5. Báo cáo định kỳ sức khỏe & Pin của các Trạm Lặp (`HEARTBEAT`):
+#### 5. Sự kiện phát lệnh điều khiển còi (`ALARM_CMD_SENT`):
 ```json
-{
-  "type": "HEARTBEAT",
-  "src": 146,
-  "battery": 3980,
-  "role": "REPEATER",
-  "rssi": -82.0,
-  "snr": 6.5
-}
+{"type":"ALARM_CMD_SENT","target":2,"action":"ON","duration":15}
 ```
+
+#### 6. Xác nhận Trạm Lặp thực thi lệnh còi thành công / thất bại (`CMD_STATUS`):
+* Khi Repeater đích nhận lệnh và trả gói ACK thành công:
+  ```json
+  {"type":"CMD_STATUS","cmd":"ALARM","msg_id":105,"src":2,"status":"ACK_CONFIRMED","rtt_ms":195}
+  ```
+* Khi không nhận được phản hồi sau số lần thử (Timeout):
+  ```json
+  {"type":"CMD_STATUS","cmd":"ALARM","msg_id":105,"target":2,"status":"FAILED","reason":"NO_ACK"}
+  ```
+* Khi cú pháp lệnh hoặc tham số không hợp lệ:
+  ```json
+  {"type":"CMD_STATUS","cmd":"ALARM","status":"FAILED","reason":"BAD_FORMAT"}
+  ```
+
+> [!NOTE]
+> **Đặc tả 100% Chuẩn NDJSON thuần khiết trên Gateway:**
+> - Toàn bộ các dòng log gỡ lỗi dạng văn bản (`[RX]`, `[TX]`, `[CMD]`, `[QoS]`, `[RELAY]`, `[STATUS]`...) và banner khởi động `===` đều đã được lọc bỏ hoàn toàn khi biên dịch cho `ROLE_GATEWAY`.
+> - Tính năng báo cáo Heartbeat đã được loại bỏ tại Gateway để giữ cho luồng dữ liệu đẩy lên Dashboard hoàn toàn gọn gàng, chỉ tập trung vào các sự kiện tác chiến quan trọng (SOS, Chat, Điều khiển còi, Xác nhận trạng thái lệnh).
+> - Mọi dòng xuất ra cổng Serial của Gateway đều là 1 đối tượng JSON duy nhất kết thúc bằng ký tự `\n`, đảm bảo parser phía Backend/Dashboard luôn parse thành công 100% mà không bị lỗi JSON decode.
 
 ---
 
