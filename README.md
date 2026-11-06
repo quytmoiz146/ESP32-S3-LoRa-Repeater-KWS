@@ -35,6 +35,9 @@ Hệ thống được thiết kế đặc thù cho môi trường rừng núi hi
 6. **Gói tin SOS nhị phân siêu gọn (Binary Payload)**:
    - Kích thước payload chỉ **5 bytes**: Loại cảnh báo (1B) + Độ tin cậy (1B) + Hướng (1B) + Điện áp pin (2B).
    - Tổng kích thước toàn bộ gói tin cả Header chỉ **24 bytes**, thời gian truyền sóng (Airtime) cực ngắn (~45ms @ SF9 BW125), tối thiểu hóa nguy cơ va chạm và tiết kiệm pin tối đa.
+7. **Chỉ báo trạng thái trực quan (Dual LED Indicator)**:
+   - **`LED_STATUS` (GPIO 48)**: Đèn báo nguồn và hệ thống sẵn sàng hoạt động (sáng liên tục).
+   - **`LED_LORA` (GPIO 47)**: Đèn báo hoạt động truyền / nhận sóng LoRa; tự động nhấp nháy 3 lần (non-blocking 60ms ON/OFF) mỗi khi phát hoặc nhận gói tin thành công, tắt ở chế độ chờ (idle) và được bảo vệ không bị ngắt bởi MCU Light Sleep.
 
 ---
 
@@ -44,12 +47,12 @@ Hệ thống xây dựng trên module vi điều khiển **ESP32-S3-DevKitC-1 (8
 
 | Chức năng | Thiết bị ngoại vi | Chân ESP32-S3 (GPIO) | Ghi chú |
 | :--- | :--- | :--- | :--- |
-| **I2S Mic Kép** | ICS-43434 (L & R) | `GPIO12` (BCK), `GPIO14` (WS/LRCL), `GPIO13` (SD/DATA) | Chung bus 2 micro; Mic L nối GND, Mic R nối VDD |
-| **LoRa SPI** | SX1262 (Ra-01SH) | `GPIO7` (SCK), `GPIO6` (MISO), `GPIO5` (MOSI), `GPIO4` (NSS/CS) | Sử dụng HSPI riêng biệt |
-| **LoRa Control** | SX1262 Control | `GPIO8` (RST), `GPIO16` (BUSY), `GPIO20` (DIO1) | DIO1 hỗ trợ đánh thức RTC EXT1 từ Light Sleep |
-| **Thẻ MicroSD** | SD Card Slot | `GPIO40` (SCK), `GPIO41` (MISO), `GPIO39` (MOSI), `GPIO38` (CS) | Giao tiếp SPI riêng biệt |
-| **Cảnh báo tại chỗ** | Còi báo / Relay | `GPIO9` (ALARM_PIN), `GPIO48` (LED RGB/Status) | Kéo còi 7 giây khi có báo động SOS |
-| **Giám sát Pin** | Cầu phân áp | `GPIO1` (ADC1 Channel 0) | Cầu trở 100kΩ : 100kΩ (Hệ số x2.0) |
+| **I2S Mic Kép** | ICS-43434 (L & R) | `GPIO6` (BCLK), `GPIO4` (WS/LRCL), `GPIO5` (DIN/DATA) | Chung bus 2 micro; Mic L nối GND, Mic R nối VDD |
+| **LoRa SPI** | SX1262 (Ra-01SH) | `GPIO40` (SCK), `GPIO41` (MISO), `GPIO39` (MOSI), `GPIO42` (CS) | Giao thức SPI tốc độ cao |
+| **LoRa Control** | SX1262 Control | `GPIO7` (RST), `GPIO16` (BUSY), `GPIO2` (DIO1), `GPIO1` (DIO3) | DIO1 hỗ trợ ngắt đánh thức Light Sleep |
+| **Thẻ MicroSD** | SD Card Slot | `GPIO14` (SCK), `GPIO13` (MISO), `GPIO12` (MOSI), `GPIO38` (CS) | Giao tiếp SPI riêng biệt |
+| **Chỉ báo LED & Còi** | Còi / Đèn báo | `GPIO9` (ALARM), `GPIO48` (LED_STATUS), `GPIO47` (LED_LORA) | GPIO48: Nguồn; GPIO47: Nhấp nháy 3 lần khi LoRa TX/RX |
+| **Giám sát Pin** | Cầu phân áp | `GPIO8` (VIN ADC) | Cầu trở 100kΩ : 100kΩ (Hệ số x2.0) |
 
 ---
 

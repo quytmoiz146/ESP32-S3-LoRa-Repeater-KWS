@@ -9,8 +9,11 @@
 volatile unsigned long g_alarm_end_ms = 0;
 
 void setup() {
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, LOW);
+  pinMode(LED_STATUS, OUTPUT);
+  digitalWrite(LED_STATUS, HIGH); // Bật sáng LED báo nguồn hệ thống đã sẵn sàng
+
+  pinMode(LED_LORA, OUTPUT);
+  digitalWrite(LED_LORA, LOW);    // LED LoRa tắt mặc định khi ở chế độ chờ
 
   pinMode(ALARM_PIN, OUTPUT);
   digitalWrite(ALARM_PIN, LOW);
@@ -24,9 +27,6 @@ void setup() {
   delay(200);
 
   bool loraOk = lora_mesh_init();
-  if (loraOk) {
-    digitalWrite(LED, HIGH);
-  }
 
   Serial.println("\n==================================================================");
   Serial.printf("  ESP32-S3 LORA REPEATER | Node ID: %d (0x%02X) | %s\n", 
@@ -48,12 +48,6 @@ void setup() {
     Serial.println("[SYS] Repeater active — listening for mesh packets...\n");
   } else {
     Serial.println("[ERR] LoRa hardware not responding — check SPI wiring!\n");
-    for (int i = 0; i < 10; i++) {
-      digitalWrite(LED, HIGH);
-      delay(100);
-      digitalWrite(LED, LOW);
-      delay(100);
-    }
   }
 }
 
@@ -148,7 +142,8 @@ void loop() {
   // ============================================================
 #if LORA_LIGHT_SLEEP_ENABLED
   bool isSerialActive = (millis() - lastSerialActiveMs < 15000) || Serial.available();
-  if (g_alarm_end_ms == 0 && !isSerialActive) {
+  bool isLedBlinking = lora_mesh_isLedBlinking();
+  if (g_alarm_end_ms == 0 && !isSerialActive && !isLedBlinking) {
     // Ngủ mức Light Sleep (MCU ~1.5 - 2mA). Thức dậy tức thì khi DIO1 lên HIGH (gói tin tới)
     // hoặc định kỳ sau LORA_LIGHT_SLEEP_PERIOD_MS để kiểm tra hệ thống
     lora_mesh_light_sleep(LORA_LIGHT_SLEEP_PERIOD_MS);

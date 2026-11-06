@@ -398,8 +398,11 @@ bool startDetectionSystem() {
 //  Hàm khởi tạo
 // ============================================================
 void setup() {
-  pinMode(LED, OUTPUT);
-  digitalWrite(LED, LOW);
+  pinMode(LED_STATUS, OUTPUT);
+  digitalWrite(LED_STATUS, HIGH); // Bật sáng LED báo nguồn hệ thống đã sẵn sàng
+
+  pinMode(LED_LORA, OUTPUT);
+  digitalWrite(LED_LORA, LOW);    // LED LoRa tắt mặc định khi ở chế độ chờ
   
   pinMode(ALARM_PIN, OUTPUT);
   digitalWrite(ALARM_PIN, LOW);
@@ -418,9 +421,6 @@ void setup() {
 
   // 2. Khởi tạo hệ thống detection (FreeRTOS tasks)
   bool loraOk = startDetectionSystem();
-  if (loraOk) {
-    digitalWrite(LED, HIGH);
-  }
 
   Serial.println("\n==================================================================");
   Serial.printf("  ESP32-S3 NODE FULL | ID: %d (0x%02X) | %s\n",

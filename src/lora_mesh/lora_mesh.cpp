@@ -78,6 +78,42 @@ extern volatile unsigned long g_alarm_end_ms;
 #endif
 
 // ============================================================
+//  Chỉ Báo LED Truyền / Nhận LoRa (Nhấp nháy 3 lần non-blocking)
+// ============================================================
+#if defined(LED_LORA) && (LED_LORA >= 0)
+static volatile uint8_t g_led_blink_toggles = 0;
+static unsigned long g_led_last_toggle_ms = 0;
+static const unsigned long LED_TOGGLE_INTERVAL_MS = 60; // 60ms BẬT, 60ms TẮT (tổng 3 nhịp ~360ms)
+
+void lora_mesh_triggerLedBlink(uint8_t blinks) {
+  g_led_blink_toggles = blinks * 2;
+  g_led_last_toggle_ms = millis();
+  digitalWrite(LED_LORA, HIGH); // Sáng ngay lập tức
+}
+
+bool lora_mesh_isLedBlinking() {
+  return (g_led_blink_toggles > 0);
+}
+
+static void tickLedLora() {
+  if (g_led_blink_toggles == 0) return;
+  if (millis() - g_led_last_toggle_ms >= LED_TOGGLE_INTERVAL_MS) {
+    g_led_last_toggle_ms = millis();
+    g_led_blink_toggles--;
+    if (g_led_blink_toggles == 0) {
+      digitalWrite(LED_LORA, LOW);
+    } else {
+      digitalWrite(LED_LORA, (g_led_blink_toggles % 2 == 0) ? HIGH : LOW);
+    }
+  }
+}
+#else
+void lora_mesh_triggerLedBlink(uint8_t blinks) { (void)blinks; }
+bool lora_mesh_isLedBlinking() { return false; }
+static inline void tickLedLora() {}
+#endif
+
+// ============================================================
 //  ISR — Cờ báo có gói tin đến
 // ============================================================
 static volatile bool rx_packet_ready = false;
@@ -540,6 +576,9 @@ static int executeTransmit(MeshPacket &pkt) {
   
   if (state != RADIOLIB_ERR_NONE) {
     MESH_LOG("[ERR] LoRa TX fail: %d\n", state);
+  } else {
+    // Nhấp nháy LED_LORA 3 lần báo trạng thái phát gói tin thành công
+    lora_mesh_triggerLedBlink(3);
   }
   
   // Luôn luôn quay về chế độ RX — kể cả khi TX lỗi
@@ -764,6 +803,9 @@ static void processIncomingPacket() {
   }
 
   stats_rx_total++;
+
+  // Nhấp nháy LED_LORA 3 lần báo trạng thái nhận gói tin LoRa thành công
+  lora_mesh_triggerLedBlink(3);
 
   // 2. Không relay gói do chính mình gửi
   if (pkt.src_id == MY_NODE_ID) {
@@ -1220,11 +1262,23 @@ bool lora_mesh_init() {
   radio.setDio1Action(onDio1Interrupt);
   enterReceiveMode();
 
+#if defined(LED_LORA) && (LED_LORA >= 0)
+  pinMode(LED_LORA, OUTPUT);
+  digitalWrite(LED_LORA, LOW);
+#endif
+#if defined(LED_STATUS) && (LED_STATUS >= 0)
+  pinMode(LED_STATUS, OUTPUT);
+  digitalWrite(LED_STATUS, HIGH); // Báo nguồn hệ thống sẵn sàng
+#endif
+
   randomSeed(esp_random());
   return true;
 }
 
 void lora_mesh_loop() {
+  // Cập nhật trạng thái nhấp nháy LED_LORA (non-blocking)
+  tickLedLora();
+
   if (!loraMutex) return;
 
   // Cố gắng lấy mutex
@@ -1312,6 +1366,11 @@ bool lora_mesh_light_sleep(uint32_t timeoutMs) {
 #if defined(LORA_LIGHT_SLEEP_ENABLED) && (LORA_LIGHT_SLEEP_ENABLED > 0)
   // Không ngủ nếu có gói tin đang chờ hoặc chân DIO1 đang báo mức cao
   if (rx_packet_ready || digitalRead(LORA_DIO1_PIN) == HIGH) {
+    return false;
+  }
+
+  // Không ngủ nếu LED LoRa đang trong chu kỳ nhấp nháy 3 lần
+  if (lora_mesh_isLedBlinking()) {
     return false;
   }
 

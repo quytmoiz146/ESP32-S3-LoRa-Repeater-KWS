@@ -179,4 +179,14 @@ bool lora_mesh_sendAlarmCommand(uint8_t targetId, bool turnOn, uint16_t duration
 ///   4. Tắt còi trạm chỉ định: ALARM:<id>:OFF
 bool lora_mesh_processAlarmCommand(const char* line);
 
+// ============================================================
+//  LED LoRa Transmission & Reception Indicator
+// ============================================================
+
+/// Kích hoạt nhấp nháy LED_LORA (mặc định 3 lần) khi có sự kiện truyền/nhận gói tin
+void lora_mesh_triggerLedBlink(uint8_t blinks = 3);
+
+/// Kiểm tra xem LED_LORA có đang trong chu kỳ nhấp nháy hay không (chống ngủ ngắt quãng)
+bool lora_mesh_isLedBlinking();
+
 #endif // LORA_MESH_H

@@ -10,7 +10,8 @@
 // ============================================================
 
 // --- Ngoại vi cơ bản ---
-#define LED             48
+#define LED_STATUS      48    // LED báo trạng thái nguồn hệ thống
+#define LED_LORA        47    // LED báo trạng thái truyền/nhận sóng LoRa (nhấp nháy 3 lần)
 #define ALARM_PIN       9
 
 // ============================================================
@@ -19,9 +20,9 @@
 //  Mic L: chân L/R nối GND -> phát ở WS mức thấp
 //  Mic R: chân L/R nối VDD -> phát ở WS mức cao
 // ============================================================
-#define I2S_BCK_PIN     12     // BCLK  - Xung nhịp bit
-#define I2S_WS_PIN      14     // LRCL  - Chọn kênh trái/phải
-#define I2S_DATA_IN_PIN 13     // SD    - Dữ liệu ra từ mic
+#define I2S_BCK_PIN     6     // BCLK  - Xung nhịp bit
+#define I2S_WS_PIN      4     // LRCL  - Chọn kênh trái/phải
+#define I2S_DATA_IN_PIN 5     // SD    - Dữ liệu ra từ mic
 
 #define I2S_PORT        I2S_NUM_0
 #define I2S_SAMPLE_RATE 16000  // 16 kHz
@@ -37,9 +38,9 @@
 //  Cấu hình chân thẻ SD (chế độ SPI)
 // ============================================================
 #define SD_CS_PIN       38
-#define SD_SCK_PIN      40
-#define SD_MOSI_PIN     39
-#define SD_MISO_PIN     41
+#define SD_SCK_PIN      14
+#define SD_MOSI_PIN     12
+#define SD_MISO_PIN     13
 
 #define WAV_RECORD_DURATION_SEC 1.0f
 #define WAV_FOLDER              "/recordings"
@@ -91,14 +92,14 @@
 // ============================================================
 //  Cấu hình chân LoRa SX1262 trên Trạm Repeater
 // ============================================================
-#define LORA_SCK_PIN    7
-#define LORA_MOSI_PIN   5
-#define LORA_MISO_PIN   6
-#define LORA_CS_PIN     4
-#define LORA_RST_PIN    8
+#define LORA_SCK_PIN    40
+#define LORA_MOSI_PIN   39
+#define LORA_MISO_PIN   41
+#define LORA_CS_PIN     42
+#define LORA_RST_PIN    7
 #define LORA_BUSY_PIN   16
-#define LORA_DIO1_PIN   20
-#define LORA_DIO3_PIN   -1
+#define LORA_DIO1_PIN   2
+#define LORA_DIO3_PIN   1
 
 #define LORA_RXEN_PIN   -1
 #define LORA_TXEN_PIN   -1
@@ -124,7 +125,7 @@
 // ============================================================
 //  Giám sát Pin & Bảo vệ Sụt nguồn (Battery Protection)
 // ============================================================
-#define PIN_VBAT_READ         1     // Chân ADC đọc pin (GPIO1)
+#define PIN_VBAT_READ         8     // Chân ADC đọc pin (GPIO1)
 #define BATTERY_DIVIDER_RATIO 2.0f  // Cầu phân áp 100k : 100k -> x2
 #define BATTERY_CRITICAL_MV   3000  // Ngưỡng kiệt pin khẩn cấp 3.0V
 
