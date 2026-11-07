@@ -1,6 +1,5 @@
 // ============================================================
-//  LORA REPEATER — Trạm chuyển tiếp rẻ tiền (chỉ relay)
-//  Không có KWS, I2S, SD card — chỉ nhận và phát lại gói tin
+//  LORA REPEATER SIMPLE — Trạm lặp chuyển tiếp tiết kiệm năng lượng
 // ============================================================
 #include "config.h"
 #include <Arduino.h>
@@ -10,13 +9,17 @@ volatile unsigned long g_alarm_end_ms = 0;
 
 void setup() {
   pinMode(LED_STATUS, OUTPUT);
-  digitalWrite(LED_STATUS, HIGH); // Bật sáng LED báo nguồn hệ thống đã sẵn sàng
+  digitalWrite(LED_STATUS, LED_ACTIVE_LEVEL); // Báo nguồn hệ thống sẵn sàng
 
   pinMode(LED_LORA, OUTPUT);
-  digitalWrite(LED_LORA, LOW);    // LED LoRa tắt mặc định khi ở chế độ chờ
+  digitalWrite(LED_LORA, LED_INACTIVE_LEVEL); // LED LoRa tắt ở chế độ chờ
 
   pinMode(ALARM_PIN, OUTPUT);
   digitalWrite(ALARM_PIN, LOW);
+
+#if defined(BTN_PIN) && (BTN_PIN >= 0)
+  pinMode(BTN_PIN, INPUT_PULLUP);
+#endif
 
   Serial.begin(115200);
 
@@ -41,7 +44,7 @@ void setup() {
                 (LORA_RX_DUTY_CYCLE_ENABLED && LORA_LIGHT_SLEEP_ENABLED) ? "ON" : "OFF",
                 LORA_RX_DUTY_CYCLE_ENABLED ? "ON" : "OFF",
                 LORA_LIGHT_SLEEP_ENABLED ? "ON" : "OFF");
-  Serial.println("  Commands: [t] SOS Gateway  [p] Ping Broadcast  [h] Heartbeat  [r] Routes  [w] Watchdog  [s] Power");
+  Serial.println("  Commands: [t/BTN] SOS Gateway  [p] Ping Broadcast  [h] Heartbeat  [r] Routes  [w] Watchdog  [s] Power");
   Serial.println("            ALARM:ALL:ON | ALARM:ALL:OFF | ALARM:<id>:ON | ALARM:<id>:OFF | CHAT:...");
   Serial.println("==================================================================");
   if (loraOk) {
@@ -52,23 +55,24 @@ void setup() {
 }
 
 void loop() {
-  // Xử lý báo động
+  // Còi báo động (tự ngắt khi hết thời gian)
   if (g_alarm_end_ms > 0) {
     if (millis() < g_alarm_end_ms) {
       digitalWrite(ALARM_PIN, HIGH);
     } else {
       digitalWrite(ALARM_PIN, LOW);
-      g_alarm_end_ms = 0; // Reset
+      g_alarm_end_ms = 0;
     }
   }
 
   lora_mesh_loop();
 
+  // Xử lý tập lệnh điều khiển từ cổng Serial
   static String serialBuffer = "";
   static unsigned long lastSerialActiveMs = 0;
 
   while (Serial.available()) {
-    lastSerialActiveMs = millis(); // Giữ MCU thức 15s khi người dùng đang thao tác
+    lastSerialActiveMs = millis(); // Giữ MCU thức 15s khi người dùng thao tác
     char c = (char)Serial.read();
     if (c == '\r') continue;
     if (c == '\n') {
@@ -76,7 +80,7 @@ void loop() {
       if (serialBuffer.length() > 0) {
         if (serialBuffer.startsWith("ALARM:")) {
           lora_mesh_processAlarmCommand(serialBuffer.c_str());
-          // Kích hoạt còi tại chỗ nếu là lệnh bật/tắt để người test nghe thấy ngay
+          // Kích hoạt còi tại chỗ nếu nhận lệnh bật/tắt
           if (serialBuffer.indexOf("ON") != -1) {
             pinMode(ALARM_PIN, OUTPUT);
             digitalWrite(ALARM_PIN, HIGH);
@@ -127,25 +131,18 @@ void loop() {
     }
   }
 
-  // ============================================================
-  //  Telemetry: Tự động gửi Heartbeat pin định kỳ về Gateway
-  // ============================================================
+  // Tự động gửi Heartbeat định kỳ về Gateway
   static unsigned long lastHeartbeatTx = 0;
   if (millis() - lastHeartbeatTx >= LORA_HEARTBEAT_INTERVAL_MS) {
     lastHeartbeatTx = millis();
     lora_mesh_sendHeartbeat(false);
   }
 
-  // ============================================================
-  //  Power Saving: Light Sleep khi rảnh rỗi (MeshCore standard)
-  //  Không ngủ nếu đang hú còi hoặc vừa có thao tác Serial trong 15s
-  // ============================================================
+  // Light Sleep khi rảnh rỗi (không ngủ nếu đang còi, vừa thao tác Serial hoặc LED đang nhấp nháy)
 #if LORA_LIGHT_SLEEP_ENABLED
   bool isSerialActive = (millis() - lastSerialActiveMs < 15000) || Serial.available();
   bool isLedBlinking = lora_mesh_isLedBlinking();
   if (g_alarm_end_ms == 0 && !isSerialActive && !isLedBlinking) {
-    // Ngủ mức Light Sleep (MCU ~1.5 - 2mA). Thức dậy tức thì khi DIO1 lên HIGH (gói tin tới)
-    // hoặc định kỳ sau LORA_LIGHT_SLEEP_PERIOD_MS để kiểm tra hệ thống
     lora_mesh_light_sleep(LORA_LIGHT_SLEEP_PERIOD_MS);
   } else {
     delay(10);

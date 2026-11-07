@@ -52,6 +52,7 @@ Hệ thống xây dựng trên module vi điều khiển **ESP32-S3-DevKitC-1 (8
 | **LoRa Control** | SX1262 Control | `GPIO7` (RST), `GPIO16` (BUSY), `GPIO2` (DIO1), `GPIO1` (DIO3) | DIO1 hỗ trợ ngắt đánh thức Light Sleep |
 | **Thẻ MicroSD** | SD Card Slot | `GPIO14` (SCK), `GPIO13` (MISO), `GPIO12` (MOSI), `GPIO38` (CS) | Giao tiếp SPI riêng biệt |
 | **Chỉ báo LED & Còi** | Còi / Đèn báo | `GPIO9` (ALARM), `GPIO48` (LED_STATUS), `GPIO47` (LED_LORA) | GPIO48: Nguồn; GPIO47: Nhấp nháy 3 lần khi LoRa TX/RX |
+| **Nút bấm kiểm tra** | Nút nhấn cơ (BTN) | `GPIO3` (BTN) | Nhấn nút kích hoạt gửi gói tin Test SOS về Gateway (tương tự lệnh Serial `t`) |
 | **Giám sát Pin** | Cầu phân áp | `GPIO8` (VIN ADC) | Cầu trở 100kΩ : 100kΩ (Hệ số x2.0) |
 
 ---

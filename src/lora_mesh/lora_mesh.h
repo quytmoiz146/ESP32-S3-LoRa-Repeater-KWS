@@ -24,12 +24,12 @@
 #define PKT_FLAG_BINARY   0x04 // Payload là định dạng nhị phân siêu gọn
 
 // ============================================================
-//  Định dạng Nhị phân Siêu gọn cho Cảnh báo SOS (Chỉ 5 bytes!)
+//  Định dạng nhị phân cảnh báo SOS (5 bytes)
 // ============================================================
 enum AlertType : uint8_t {
-  ALERT_HEARTBEAT = 0, // Gói đo lường pin & nhịp tim định kỳ
-  ALERT_BAWL      = 1, // Tiếng kêu cứu / la hét (KWS detected)
-  ALERT_TEST      = 99
+  ALERT_HEARTBEAT = 0, // Đo lường pin & telemetry định kỳ
+  ALERT_BAWL      = 1, // KWS phát hiện tiếng kêu cứu
+  ALERT_TEST      = 99 // Gói thử nghiệm mạng (Test SOS)
 };
 
 enum DirectionType : uint8_t {
@@ -180,13 +180,16 @@ bool lora_mesh_sendAlarmCommand(uint8_t targetId, bool turnOn, uint16_t duration
 bool lora_mesh_processAlarmCommand(const char* line);
 
 // ============================================================
-//  LED LoRa Transmission & Reception Indicator
+//  Chỉ báo LED LoRa & Nút nhấn BTN
 // ============================================================
 
-/// Kích hoạt nhấp nháy LED_LORA (mặc định 3 lần) khi có sự kiện truyền/nhận gói tin
+/// Kích hoạt nhấp nháy LED_LORA khi truyền/nhận gói tin
 void lora_mesh_triggerLedBlink(uint8_t blinks = 3);
 
-/// Kiểm tra xem LED_LORA có đang trong chu kỳ nhấp nháy hay không (chống ngủ ngắt quãng)
+/// Kiểm tra LED_LORA có đang nhấp nháy hay không
 bool lora_mesh_isLedBlinking();
+
+/// Kiểm tra nút nhấn BTN (GPIO 3) gửi Test SOS
+void lora_mesh_checkButton();
 
 #endif // LORA_MESH_H

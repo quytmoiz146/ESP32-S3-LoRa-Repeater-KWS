@@ -399,13 +399,17 @@ bool startDetectionSystem() {
 // ============================================================
 void setup() {
   pinMode(LED_STATUS, OUTPUT);
-  digitalWrite(LED_STATUS, HIGH); // Bật sáng LED báo nguồn hệ thống đã sẵn sàng
+  digitalWrite(LED_STATUS, LED_ACTIVE_LEVEL); // Báo nguồn hệ thống sẵn sàng
 
   pinMode(LED_LORA, OUTPUT);
-  digitalWrite(LED_LORA, LOW);    // LED LoRa tắt mặc định khi ở chế độ chờ
+  digitalWrite(LED_LORA, LED_INACTIVE_LEVEL); // LED LoRa tắt ở chế độ chờ
   
   pinMode(ALARM_PIN, OUTPUT);
   digitalWrite(ALARM_PIN, LOW);
+
+#if defined(BTN_PIN) && (BTN_PIN >= 0)
+  pinMode(BTN_PIN, INPUT_PULLUP);
+#endif
 
   Serial.begin(115200);
   unsigned long startWait = millis();
@@ -434,7 +438,7 @@ void setup() {
                 (unsigned long)(ESP.getFreeHeap() / 1024),
                 (unsigned long)(ESP.getFreePsram() / 1024),
                 sdReady ? "Mounted" : "Fail");
-  Serial.println("  Commands: [t] SOS  [p] Ping  [h] Heartbeat  [m] Routes  [w] Watchdog  [s] Power  [r] Rec WAV");
+  Serial.println("  Commands: [t/BTN] SOS  [p] Ping  [h] Heartbeat  [m] Routes  [w] Watchdog  [s] Power  [r] Rec WAV");
   Serial.println("==================================================================");
   Serial.println("[SYS] Detection pipeline active — listening for audio events...\n");
 }

@@ -5,28 +5,31 @@
 #include <driver/i2s.h>
 
 // ============================================================
-//  CẤU HÌNH DÀNH RIÊNG CHO TRẠM LẶP (REPEATER)
+//  CẤU HÌNH TRẠM LẶP (REPEATER)
 //  (Áp dụng cho repeater_full và repeater_simple)
 // ============================================================
 
 // --- Ngoại vi cơ bản ---
-#define LED_STATUS      48    // LED báo trạng thái nguồn hệ thống
-#define LED_LORA        47    // LED báo trạng thái truyền/nhận sóng LoRa (nhấp nháy 3 lần)
-#define ALARM_PIN       9
+#define LED_STATUS          48    // LED báo nguồn / trạng thái hệ thống
+#define LED_LORA            47    // LED báo truyền/nhận LoRa (nhấp nháy khi có gói tin)
+#define ALARM_PIN           9     // Chân còi báo động
+#define BTN_PIN             3     // Nút nhấn gửi lệnh Test SOS về Gateway (GPIO 3)
+
+// Mức logic điều khiển LED (Active-LOW: Anode nối +3V3, Cathode nối GPIO)
+#define LED_ACTIVE_LEVEL    LOW   // Bật LED
+#define LED_INACTIVE_LEVEL  HIGH  // Tắt LED
 
 // ============================================================
 //  Cấu hình chân I2S (Dual Mic ICS-43434)
-//  2 mic dùng chung 1 cổng I2S: BCLK, WS, SD
-//  Mic L: chân L/R nối GND -> phát ở WS mức thấp
-//  Mic R: chân L/R nối VDD -> phát ở WS mức cao
+//  Mic L: L/R nối GND (WS mức thấp) | Mic R: L/R nối VDD (WS mức cao)
 // ============================================================
-#define I2S_BCK_PIN     6     // BCLK  - Xung nhịp bit
-#define I2S_WS_PIN      4     // LRCL  - Chọn kênh trái/phải
-#define I2S_DATA_IN_PIN 5     // SD    - Dữ liệu ra từ mic
+#define I2S_BCK_PIN     6     // BCLK - Xung nhịp bit
+#define I2S_WS_PIN      4     // WS / LRCL - Chọn kênh trái/phải
+#define I2S_DATA_IN_PIN 5     // SD / DIN - Dữ liệu âm thanh
 
 #define I2S_PORT        I2S_NUM_0
-#define I2S_SAMPLE_RATE 16000  // 16 kHz
-#define I2S_SAMPLE_BITS I2S_BITS_PER_SAMPLE_32BIT // 32-bit native -> 16-bit PCM
+#define I2S_SAMPLE_RATE 16000 // 16 kHz
+#define I2S_SAMPLE_BITS I2S_BITS_PER_SAMPLE_32BIT
 #define I2S_CHANNEL     I2S_CHANNEL_FMT_RIGHT_LEFT
 
 #define I2S_DMA_BUF_COUNT    8
@@ -35,7 +38,7 @@
 #define I2S_SAMPLES_PER_READ (I2S_FRAMES_PER_READ * 2)
 
 // ============================================================
-//  Cấu hình chân thẻ SD (chế độ SPI)
+//  Cấu hình thẻ nhớ SD (chế độ SPI)
 // ============================================================
 #define SD_CS_PIN       38
 #define SD_SCK_PIN      14
@@ -106,7 +109,7 @@
 #define LORA_TCXO_VOLTAGE 0.0f
 
 // ============================================================
-//  Chế độ Tiết kiệm năng lượng kép (Dual Power Saving - MeshCore)
+//  Tiết kiệm năng lượng kép (Dual Power Saving - MeshCore)
 // ============================================================
 // --- Tầng 1: SX1262 Dynamic RX Duty Cycle (RXPS) ---
 #define LORA_RX_DUTY_CYCLE_ENABLED  1
@@ -120,14 +123,13 @@
 
 // --- Tầng 2: MCU Light Sleep khi rảnh rỗi ---
 #define LORA_LIGHT_SLEEP_ENABLED    1
-#define LORA_LIGHT_SLEEP_PERIOD_MS  5000    // Tự động thức sau 5s
+#define LORA_LIGHT_SLEEP_PERIOD_MS  5000    // Chu kỳ thức kiểm tra (5s)
 
 // ============================================================
-//  Giám sát Pin & Bảo vệ Sụt nguồn (Battery Protection)
+//  Giám sát Pin & Bảo vệ Sụt nguồn (Brownout Protection)
 // ============================================================
-#define PIN_VBAT_READ         8     // Chân ADC đọc pin (GPIO1)
+#define PIN_VBAT_READ         8     // Chân ADC đọc điện áp pin (GPIO8)
 #define BATTERY_DIVIDER_RATIO 2.0f  // Cầu phân áp 100k : 100k -> x2
 #define BATTERY_CRITICAL_MV   3000  // Ngưỡng kiệt pin khẩn cấp 3.0V
 
 #endif // CONFIG_REPEATER_H
-

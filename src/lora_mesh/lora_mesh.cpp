@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <esp_sleep.h>
 #include <esp_mac.h>
+#include <driver/gpio.h>
 
 // ============================================================
 //  Logging Configuration
@@ -88,7 +89,7 @@ static const unsigned long LED_TOGGLE_INTERVAL_MS = 60; // 60ms BẬT, 60ms TẮ
 void lora_mesh_triggerLedBlink(uint8_t blinks) {
   g_led_blink_toggles = blinks * 2;
   g_led_last_toggle_ms = millis();
-  digitalWrite(LED_LORA, HIGH); // Sáng ngay lập tức
+  digitalWrite(LED_LORA, LED_ACTIVE_LEVEL); // Sáng nhịp đầu tiên
 }
 
 bool lora_mesh_isLedBlinking() {
@@ -101,9 +102,9 @@ static void tickLedLora() {
     g_led_last_toggle_ms = millis();
     g_led_blink_toggles--;
     if (g_led_blink_toggles == 0) {
-      digitalWrite(LED_LORA, LOW);
+      digitalWrite(LED_LORA, LED_INACTIVE_LEVEL); // Hết chu kỳ nhấp nháy -> TẮT
     } else {
-      digitalWrite(LED_LORA, (g_led_blink_toggles % 2 == 0) ? HIGH : LOW);
+      digitalWrite(LED_LORA, (g_led_blink_toggles % 2 != 0) ? LED_INACTIVE_LEVEL : LED_ACTIVE_LEVEL);
     }
   }
 }
@@ -111,6 +112,40 @@ static void tickLedLora() {
 void lora_mesh_triggerLedBlink(uint8_t blinks) { (void)blinks; }
 bool lora_mesh_isLedBlinking() { return false; }
 static inline void tickLedLora() {}
+#endif
+
+// ============================================================
+//  Nút Nhấn Vật Lý BTN (GPIO 3) -> Gửi Lệnh Test SOS tương tự 't'
+// ============================================================
+#if defined(BTN_PIN) && (BTN_PIN >= 0)
+void lora_mesh_checkButton() {
+  static int lastBtnReading = HIGH;
+  static int stableBtnState = HIGH;
+  static unsigned long lastDebounceTime = 0;
+  const unsigned long debounceDelay = 50;
+
+  int reading = digitalRead(BTN_PIN);
+  if (reading != lastBtnReading) {
+    lastDebounceTime = millis();
+  }
+
+  if ((millis() - lastDebounceTime) > debounceDelay) {
+    if (reading != stableBtnState) {
+      stableBtnState = reading;
+      // Nút được nhấn xuống (Active-LOW: nối GND khi nhấn)
+      if (stableBtnState == LOW) {
+        Serial.println("\n[BTN] Button (GPIO3) pressed -> Sending Test SOS to Gateway (dest: 0)...");
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
+        g_alarm_end_ms = millis() + 7000;
+#endif
+        lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, GATEWAY_ID);
+      }
+    }
+  }
+  lastBtnReading = reading;
+}
+#else
+void lora_mesh_checkButton() {}
 #endif
 
 // ============================================================
@@ -1264,11 +1299,14 @@ bool lora_mesh_init() {
 
 #if defined(LED_LORA) && (LED_LORA >= 0)
   pinMode(LED_LORA, OUTPUT);
-  digitalWrite(LED_LORA, LOW);
+  digitalWrite(LED_LORA, LED_INACTIVE_LEVEL); // Tắt ở chế độ chờ
 #endif
 #if defined(LED_STATUS) && (LED_STATUS >= 0)
   pinMode(LED_STATUS, OUTPUT);
-  digitalWrite(LED_STATUS, HIGH); // Báo nguồn hệ thống sẵn sàng
+  digitalWrite(LED_STATUS, LED_ACTIVE_LEVEL); // Báo nguồn sẵn sàng
+#endif
+#if defined(BTN_PIN) && (BTN_PIN >= 0)
+  pinMode(BTN_PIN, INPUT_PULLUP); // Nút nhấn gửi Test SOS
 #endif
 
   randomSeed(esp_random());
@@ -1278,6 +1316,9 @@ bool lora_mesh_init() {
 void lora_mesh_loop() {
   // Cập nhật trạng thái nhấp nháy LED_LORA (non-blocking)
   tickLedLora();
+
+  // Kiểm tra nút nhấn vật lý BTN (GPIO 3) -> Gửi Test SOS
+  lora_mesh_checkButton();
 
   if (!loraMutex) return;
 
@@ -1400,16 +1441,22 @@ bool lora_mesh_light_sleep(uint32_t timeoutMs) {
     }
   }
 
-  // 1. Chờ xuất hết dữ liệu Serial trước khi ngủ để tránh rác ký tự do ngắt xung nhịp
+  // 1. Chờ xuất hết dữ liệu Serial
   Serial.flush();
 
-  // 2. Tạm thời gỡ bỏ ngắt GPIO trước khi ngủ để tránh CPU interrupt matrix bị kẹt vòng lặp ngắt mức cao
+  // 2. Tạm gỡ ngắt GPIO trước khi ngủ
   detachInterrupt(digitalPinToInterrupt(LORA_DIO1_PIN));
 
-  // 3. Cấu hình nguồn đánh thức bằng RTC EXT1 trên chân DIO1 (mức HIGH khi nhận gói tin)
+  // 3. Đánh thức bằng ngắt DIO1 (RTC EXT1) khi có gói tin tới
   esp_sleep_enable_ext1_wakeup(1ULL << LORA_DIO1_PIN, ESP_EXT1_WAKEUP_ANY_HIGH);
 
-  // 4. Cấu hình hẹn giờ định kỳ đánh thức MCU
+#if defined(BTN_PIN) && (BTN_PIN >= 0)
+  // Đánh thức tức thì khi nhấn nút BTN (mức LOW)
+  gpio_wakeup_enable((gpio_num_t)BTN_PIN, GPIO_INTR_LOW_LEVEL);
+  esp_sleep_enable_gpio_wakeup();
+#endif
+
+  // 4. Hẹn giờ đánh thức định kỳ
   if (timeoutMs > 0) {
     esp_sleep_enable_timer_wakeup(timeoutMs * 1000ULL);
   }
@@ -1417,15 +1464,19 @@ bool lora_mesh_light_sleep(uint32_t timeoutMs) {
   // 5. Vào Light Sleep
   esp_light_sleep_start();
 
-  // 6. Sau khi thức dậy: vô hiệu hóa nguồn đánh thức EXT1
+  // 6. Sau khi thức dậy: vô hiệu hóa các nguồn đánh thức
   esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_EXT1);
+#if defined(BTN_PIN) && (BTN_PIN >= 0)
+  gpio_wakeup_disable((gpio_num_t)BTN_PIN);
+  esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+#endif
 
-  // 7. Nếu DIO1 ở mức cao, đánh dấu cờ để vòng lặp xử lý ngay
+  // 7. Nếu DIO1 ở mức HIGH, đặt cờ để loop() đọc gói tin ngay
   if (digitalRead(LORA_DIO1_PIN) == HIGH) {
     rx_packet_ready = true;
   }
 
-  // 8. Khôi phục lại ngắt cạnh lên (RISING) cho RadioLib
+  // 8. Khôi phục lại ngắt DIO1 cho RadioLib
   radio.setDio1Action(onDio1Interrupt);
 
   return true;
