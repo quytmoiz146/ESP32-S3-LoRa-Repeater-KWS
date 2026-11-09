@@ -124,7 +124,7 @@ Dự án cung cấp 4 chế độ biên dịch tối ưu hóa tùy vai trò thi�
   ```
 
 ### 3. `gateway` (Trạm Cổng Chỉ Huy Trung Tâm)
-* **Chức năng**: Cắm trực tiếp vào PC/Laptop qua cổng USB, giao tiếp hai chiều dạng **NDJSON** qua Serial (115200 baud). Không cần BLE. Nhận lệnh `CHAT:...` từ PC để gửi tới mọi node trong mạng lưới.
+* **Chức năng**: Cắm trực tiếp vào PC/Laptop qua cổng USB, giao tiếp hai chiều dạng **NDJSON** qua Serial (115200 baud). Không cần BLE. Nhận lệnh `CHAT:...` (nhắn tin) và `ALARM:...` (điều khiển còi Repeater) từ PC để tương tác với toàn mạng lưới.
 * **Lệnh nạp**:
   ```bash
   pio run -e gateway --target upload
@@ -156,6 +156,27 @@ CHAT:<client_id>:<target_node>:<utf8_text>\n
   * Khi phát sóng: `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"SENDING"}`
   * Khi nhận ACK từ đích cuối: `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"DELIVERED"}`
   * Khi hết số lần thử (3 lần/2s): `{"type":"CHAT_STATUS","client_id":101,"msg_id":2501,"status":"FAILED","reason":"NO_ACK"}`
+
+### Lệnh Điều Khiển Còi Báo Động (Gửi từ PC xuống Gateway qua UART):
+```text
+ALARM:<target_node>:ON[:<duration_sec>]\n
+ALARM:<target_node>:OFF\n
+```
+* **Cú pháp gửi từ PC**:
+  * Bật còi trạm chỉ định: `ALARM:<node_id>:ON` *(mặc định 7s)* hoặc `ALARM:<node_id>:ON:<sec>` *(Ví dụ: `ALARM:108:ON:15`)*.
+  * Tắt còi trạm chỉ định: `ALARM:<node_id>:OFF` *(Ví dụ: `ALARM:108:OFF`)*.
+  * Bật còi toàn bộ mạng: `ALARM:ALL:ON` hoặc `ALARM:ALL:ON:<sec>` *(Broadcast toàn mạng, không yêu cầu ACK)*.
+  * Tắt còi toàn bộ mạng: `ALARM:ALL:OFF` *(Broadcast tắt toàn mạng)*.
+* **Gói tin vô tuyến trên không (MeshPacket)**:
+  * `msg_type`: `7` (`PKT_TYPE_CMD`), `dest_id`: `<node_id>` hoặc `255` (`BROADCAST_ID`).
+  * Payload: Chuỗi ASCII `"ALARM:ON:<sec>"` hoặc `"ALARM:OFF"`.
+* **Phản hồi trạng thái từ Gateway (NDJSON)**:
+  * Khi phát lệnh: `{"type":"ALARM_CMD_SENT","target":108,"action":"ON","duration":15}`
+  * Khi nhận ACK từ trạm đích: `{"type":"CMD_STATUS","cmd":"ALARM","msg_id":12,"src":108,"status":"ACK_CONFIRMED","rtt_ms":95}`
+  * Khi hết lượt thử không có ACK: `{"type":"CMD_STATUS","cmd":"ALARM","msg_id":12,"target":108,"status":"FAILED","reason":"NO_ACK"}`
+* **Sự kiện thực thi tại Repeater (NDJSON)**:
+  * Khi nhận và kích hoạt còi: `{"type":"ALARM_ACTION","action":"ON","duration":15,"by":0}`
+  * Khi nhận lệnh tắt còi: `{"type":"ALARM_ACTION","action":"OFF","by":0}`
 
 ### Các phím tắt điều khiển nhanh trên bàn phím (Dành cho trạm Repeater):
 
