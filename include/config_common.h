@@ -14,6 +14,11 @@
 extern volatile unsigned long g_alarm_end_ms;
 #endif
 
+// --- Thời gian còi hú cảnh báo mặc định (ms) ---
+#ifndef ALARM_DURATION_MS
+#define ALARM_DURATION_MS 5000
+#endif
+
 // --- Tham số RF LoRa SX1262 ---
 #define LORA_FREQUENCY        921.4f   // Tần số hoạt động (MHz)
 #define LORA_BANDWIDTH        125.0f   // Băng thông (kHz)

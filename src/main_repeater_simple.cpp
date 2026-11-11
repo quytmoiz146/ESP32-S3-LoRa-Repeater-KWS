@@ -84,8 +84,8 @@ void loop() {
           if (serialBuffer.indexOf("ON") != -1) {
             pinMode(ALARM_PIN, OUTPUT);
             digitalWrite(ALARM_PIN, HIGH);
-            g_alarm_end_ms = millis() + 7000;
-            Serial.println("[LOCAL] ✓ Alarm hardware triggered locally (7s)");
+            g_alarm_end_ms = millis() + ALARM_DURATION_MS;
+            Serial.println("[LOCAL] ✓ Alarm hardware triggered locally (5s)");
           } else if (serialBuffer.indexOf("OFF") != -1) {
             digitalWrite(ALARM_PIN, LOW);
             g_alarm_end_ms = 0;
@@ -97,7 +97,7 @@ void loop() {
           char cmd = serialBuffer[0];
           if (cmd == 't' || cmd == 'T') {
             Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
-            g_alarm_end_ms = millis() + 7000;
+            g_alarm_end_ms = millis() + ALARM_DURATION_MS;
             lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, GATEWAY_ID);
           } else if (cmd == 'p' || cmd == 'P') {
             Serial.println("[CMD] Ping Broadcast -> All Nodes (req ACK)...");

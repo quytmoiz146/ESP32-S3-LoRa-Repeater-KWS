@@ -20,8 +20,10 @@ Hệ thống được thiết kế đặc thù cho môi trường rừng núi hi
    - Hoạt động ở dải tần **921.4 MHz** (hợp quy chuẩn AS923-2 tại Việt Nam), công suất phát tối đa +22 dBm với module Semtech **SX1262 (Ai-Thinker Ra-01SH)**.
    - **Dynamic Node ID**: Tự động gán ID duy nhất từ byte cuối của địa chỉ MAC phần cứng (eFuse), cắm là chạy, không cần cấu hình mã tĩnh.
    - **Định tuyến Unicast Next-Hop**: Tự động học đường truyền ngược (Reverse Path Learning) và gửi đích danh qua trạm kế cận (Next-Hop Unicast), chỉ chuyển sang Broadcast Flood khi khám phá tuyến đường mới.
-   - **Lọc gói tin thông minh (Next-Hop Filtering)**: Các node trung gian không nằm trong lộ trình sẽ tự động bỏ qua gói (`[SKIP]`), giải phóng hoàn toàn băng thông mạng RF.
+   - **Lọc gói tin thông minh (Next-Hop Filtering)**: Các node trung gian không nằm trong lộ trình sẽ tự động bỏ qua gói (`[SKIP]`), giải phóng hoàn toàn băng thông mạng RF và tuyệt đối không hú còi.
    - **Chống lặp & chống vòng tròn**: Bộ đệm Deduplication nhớ 32 gói gần nhất, giới hạn 7 bước nhảy (Hop Limit) và lưu vết hành trình gói tin (`path[8]`).
+   - **Nhận diện vai trò thiết bị 0-overhead**: Tự động nhận diện nguồn phát là `NODE` (ba lô cứu hộ) hay `REPEATER` (trạm lặp) qua cờ nhị phân `PKT_FLAG_FROM_NODE (0x08)` trong header gói tin.
+   - **Còi báo động định hướng chặng đầu (Smart Hop-0 Alarm)**: Khi Node phát SOS, chỉ duy nhất trạm Repeater chặng đầu tiên tiếp sóng trực tiếp và được chọn chuyển tiếp mới hú còi 5s tại chỗ; các trạm bị `[SKIP]` hoặc chặng xa hơn không hú còi.
    - **Độ tin cậy QoS (Stop-and-Wait ARQ)**: Tự động gửi gói tin xác nhận ACK, hỗ trợ phát lại (Retries tối đa 3 lần) khi rớt gói.
    - **Tránh va chạm sóng (CAD + CSMA)**: Quét kênh trước khi phát với cơ chế ngẫu nhiên hóa thời gian chờ (Slot Backoff) theo Node ID.
 4. **Tiết kiệm năng lượng kép (Dual Power Saving - MeshCore Style)**:
@@ -90,7 +92,7 @@ Hệ thống xây dựng trên module vi điều khiển **ESP32-S3-DevKitC-1 (8
                                                       ▼                             ▼
                                                    Hủy bỏ                  - Ghi file WAV & CSV lên thẻ SD
                                                                            - Định vị hướng: Trái / Phải / Giữa
-                                                                           - Bật còi báo động tại chỗ (GPIO9)
+                                                                           - Bật còi báo động tại chỗ (GPIO9 - 5s)
                                                                            - Đóng gói Binary SOS (5 bytes)
                                                                                     │
                                                                                     ▼
@@ -163,7 +165,7 @@ ALARM:<target_node>:ON[:<duration_sec>]\n
 ALARM:<target_node>:OFF\n
 ```
 * **Cú pháp gửi từ PC**:
-  * Bật còi trạm chỉ định: `ALARM:<node_id>:ON` *(mặc định 7s)* hoặc `ALARM:<node_id>:ON:<sec>` *(Ví dụ: `ALARM:108:ON:15`)*.
+  * Bật còi trạm chỉ định: `ALARM:<node_id>:ON` *(mặc định 5s)* hoặc `ALARM:<node_id>:ON:<sec>` *(Ví dụ: `ALARM:108:ON:15`)*.
   * Tắt còi trạm chỉ định: `ALARM:<node_id>:OFF` *(Ví dụ: `ALARM:108:OFF`)*.
   * Bật còi toàn bộ mạng: `ALARM:ALL:ON` hoặc `ALARM:ALL:ON:<sec>` *(Broadcast toàn mạng, không yêu cầu ACK)*.
   * Tắt còi toàn bộ mạng: `ALARM:ALL:OFF` *(Broadcast tắt toàn mạng)*.
@@ -204,13 +206,15 @@ Hệ thống sử dụng cấu trúc log một dòng với tiền tố nhận di
 
 ```text
 [STATUS] Up 00:05:30 | Batt:4.12V | RX:12 Relay:8 TX:1 Dup:2 | Routes:3 | WD:0 | Heap:210KB
-[RX] SOS #42 | Src:23->Dest:0 (NextHop:23, via:23, hop:0) | -65dBm/9.5dB | BAWL 94% [L] | Batt:4.12V | Path:23
+[RX] SOS #42 (NODE) | Src:23->Dest:0 (NextHop:23, via:23, hop:0) | -65dBm/9.5dB | BAWL 94% [L] | Batt:4.12V | Path:23
+[ALARM] ✓ 1st-Hop Repeater relaying SOS from Node -> Alarm triggered (5s)
 [RELAY] SOS #42 (Unicast -> NextHop:0) -> Hop 1 OK (Path:23->146)
 [SKIP] DATA #15: Unicast targeted to NextHop 55 (self is 146)
 [QoS] ✓ ACK CONFIRMED for msg #42 from Node 0 (RTT: 92ms)
 [WD] Radio unresponsive (IRQ=0xFFFF)! Hard reset (Resets: 1)
 [VAD] Gate ON (energy:1850 >= thr:450, floor:150)
-[KWS] Match candidate: score=0.91, margin=0.82 (bawl:0.91, noise:0.09)
+[KWS] b:88% n:6% s:6% | margin:0.82 | score:1.76/1.20 (48ms) [CONFIRMED]
+[ALERT] *** CONFIRMED: bawl (88%) | Dir: LEFT (ILD:3.2dB) | Alarm 5s ***
 [SD] Saved /recordings/detected_0005.wav (bawl 91%)
 ```
 

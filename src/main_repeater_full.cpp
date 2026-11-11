@@ -512,7 +512,7 @@ void loop() {
           case 't':
           case 'T':
             Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
-            g_alarm_end_ms = millis() + 7000;
+            g_alarm_end_ms = millis() + ALARM_DURATION_MS;
             lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, GATEWAY_ID);
             break;
           case 'p':
@@ -568,7 +568,7 @@ void loop() {
         case 't':
         case 'T':
           Serial.println("[CMD] Test SOS -> Gateway (dest: 0)...");
-          g_alarm_end_ms = millis() + 7000;
+          g_alarm_end_ms = millis() + ALARM_DURATION_MS;
           lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true, GATEWAY_ID);
           break;
         case 'p':

@@ -69,9 +69,10 @@ void keywordSpot_init() {
     return;
   }
 
-  Serial.printf("[KWS] Model: %s (%d labels, window %dms, margin thr %.2f)\n",
+  Serial.printf("[KWS] Model: %s (%d labels, window %dms, margin thr %.2f, score thr %.2f, min dur %dms)\n",
                 EI_CLASSIFIER_PROJECT_NAME, EI_CLASSIFIER_LABEL_COUNT,
-                KWS_WINDOW_SIZE_MS, KWS_MARGIN_THRESHOLD);
+                KWS_WINDOW_SIZE_MS, KWS_MARGIN_THRESHOLD,
+                KWS_SCORE_TRIGGER_THRESHOLD, KWS_MIN_DURATION_MS);
 }
 
 // ============================================================
@@ -260,6 +261,7 @@ void taskKeywordSpot(void* pvParameters) {
     // --- Reset state mỗi lần VAD gate mở ---
     DetectState detectState = DETECT_IDLE;
     uint32_t candidateStartMs = 0;
+    float accumulatedScore = 0.0f;
     uint32_t cooldownUntilMs = 0;
     bool windowFilled = false;
 
@@ -307,42 +309,50 @@ void taskKeywordSpot(void* pvParameters) {
       float otherMax = fmaxf(noiseScore, speechScore);
       float margin = bawlScore - otherMax;
 
-      // --- State machine ---
+      // --- State machine: Tích lũy điểm + Fast-reject ---
       const char* stateStr = "IDLE";
       uint32_t candidateDurMs = 0;
 
       switch (detectState) {
         case DETECT_IDLE:
-          if (margin > KWS_MARGIN_THRESHOLD) {
-            if (KWS_MIN_DURATION_MS > 0) {
-              detectState = DETECT_CANDIDATE;
-              candidateStartMs = nowMs;
-              stateStr = "CANDIDATE";
+          if (margin >= KWS_MARGIN_THRESHOLD) {
+            accumulatedScore = bawlScore;
+            candidateStartMs = nowMs;
+            if (accumulatedScore >= KWS_SCORE_TRIGGER_THRESHOLD && KWS_MIN_DURATION_MS == 0) {
+              stateStr = "CONFIRMED";
             } else {
-              stateStr = "CONFIRMED"; // Kích hoạt ngay lập tức
+              detectState = DETECT_CANDIDATE;
+              stateStr = "CANDIDATE";
             }
+          } else {
+            accumulatedScore = 0.0f;
           }
           break;
 
         case DETECT_CANDIDATE:
           candidateDurMs = nowMs - candidateStartMs;
-          if (margin <= KWS_MARGIN_THRESHOLD) {
-            // Margin rớt ngưỡng → reset ngay (không có quán tính)
+          if (margin < KWS_MARGIN_THRESHOLD) {
+            // Margin rớt ngưỡng → Fast-reject ngay lập tức (xóa sạch điểm tích lũy)
             detectState = DETECT_IDLE;
+            accumulatedScore = 0.0f;
             stateStr = "IDLE (reset)";
-          } else if (candidateDurMs >= KWS_MIN_DURATION_MS) {
-            // Duy trì đủ lâu → CONFIRMED!
-            stateStr = "CONFIRMED";
           } else {
-            stateStr = "CANDIDATE";
+            accumulatedScore += bawlScore;
+            if (accumulatedScore >= KWS_SCORE_TRIGGER_THRESHOLD && candidateDurMs >= KWS_MIN_DURATION_MS) {
+              // Đạt cả ngưỡng điểm tích lũy và thời lượng duy trì tối thiểu → CONFIRMED!
+              stateStr = "CONFIRMED";
+            } else {
+              stateStr = "CANDIDATE";
+            }
           }
           break;
       }
 
       // --- Log ---
-      Serial.printf("[KWS] b:%.0f%% n:%.0f%% s:%.0f%% | margin:%.2f (%lums) [%s]\n",
+      Serial.printf("[KWS] b:%.0f%% n:%.0f%% s:%.0f%% | margin:%.2f | score:%.2f/%.2f (%lums) [%s]\n",
                     bawlScore * 100.0f, noiseScore * 100.0f, speechScore * 100.0f,
                     margin,
+                    accumulatedScore, KWS_SCORE_TRIGGER_THRESHOLD,
                     (unsigned long)result.inferenceMs,
                     stateStr);
 
@@ -358,7 +368,7 @@ void taskKeywordSpot(void* pvParameters) {
             direction = "RIGHT";
           }
         }
-        Serial.printf("[ALERT] *** CONFIRMED: %s (%.0f%%) | Dir: %s (ILD:%.1fdB) | Alarm 7s ***\n",
+        Serial.printf("[ALERT] *** CONFIRMED: %s (%.0f%%) | Dir: %s (ILD:%.1fdB) | Alarm 5s ***\n",
                       result.label, result.score * 100.0f, direction, sa.ildDb);
 
         // Ghi log vào CSV
@@ -378,8 +388,9 @@ void taskKeywordSpot(void* pvParameters) {
 
         // Reset state + cooldown
         detectState = DETECT_IDLE;
+        accumulatedScore = 0.0f;
         cooldownUntilMs = millis() + KWS_COOLDOWN_MS;
-        g_alarm_end_ms = millis() + 7000; // Bật còi báo động 7s
+        g_alarm_end_ms = millis() + ALARM_DURATION_MS; // Bật còi báo động 5s (đồng bộ cooldown lockout)
         Serial.printf("[KWS] Cooldown %dms\n", KWS_COOLDOWN_MS);
 
         // --- Gửi SOS qua LoRa Mesh (Định dạng Nhị phân Siêu gọn + QoS ACK + Pin) ---

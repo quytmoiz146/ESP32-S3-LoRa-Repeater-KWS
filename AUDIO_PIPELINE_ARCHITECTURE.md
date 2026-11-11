@@ -30,11 +30,11 @@ flowchart TD
         SLIDE["Sliding Window Buffer\n(Cửa sổ 1000ms, bước trượt 500ms / 50% overlap)"]
         EI_DSP["Edge Impulse MFCC\n(Trích xuất đặc trưng phổ âm thanh)"]
         EI_NN["Mạng Nơ-ron INT8 EON\n(3 lớp: 'bawl', 'noise', 'speech')"]
-        MARGIN["Tính Margin = bawl - max(noise, speech)\n(Ngưỡng margin > 0.45)"]
+        MARGIN["Tính Margin & Tích Lũy Điểm\n(Margin >= 0.60 & Score >= 1.20)"]
     end
 
     subgraph OUTPUT ["Xử Lý Đầu Ra (Alert & Telemetry)"]
-        BUZZER["Bật còi báo động GPIO 9 (7 giây)"]
+        BUZZER["Bật còi báo động GPIO 9 (5 giây)"]
         SD_WAV["Lưu 2s WAV + Log CSV lên thẻ nhớ SD"]
         LORA_TX["Đóng gói LoRa Mesh Binary SOS\n(Báo độ tin cậy %, hướng L/R/C, pin mV)"]
     end
@@ -178,14 +178,27 @@ Tác vụ `taskKeywordSpot` chạy trên **Core 1** với mức ưu tiên `Prior
      * $P_{\text{speech}}$: Tiếng người nói chuyện thông thường.
      * $P_{\text{noise}}$: Tiếng ồn môi trường tự nhiên (gió, lá cây, suối,...).
 
-### 6.3. Thuật toán xác nhận bằng độ chênh lệch biên độ (Margin Confirmation)
-Nhằm triệt tiêu triệt để hiện tượng dương tính giả (False Positive) từ tiếng chim hót hoặc tiếng cành cây gãy, hệ thống áp dụng thuật toán tính **Margin**:
-$$\text{Margin} = P_{\text{bawl}} - \max(P_{\text{noise}}, P_{\text{speech}})$$
+### 6.3. Thuật toán xác nhận Margin kết hợp Tích Lũy Điểm (Score Accumulation FSM)
+Nhằm triệt tiêu triệt để hiện tượng dương tính giả (False Positive) từ tiếng chim hót, thú rừng hoặc tiếng cành cây gãy trong môi trường tự nhiên, hệ thống kết hợp 3 lớp bảo vệ đa tầng:
 
-* **Ngưỡng khẳng định**: $\text{Margin} > 0.45$.
-  *(Đảm bảo $P_{\text{bawl}}$ áp đảo hoàn toàn, thường tương đương xác suất $\ge 72.5\%$)*.
-* Khi thỏa mãn điều kiện $\rightarrow$ Trạng thái chuyển thành **`CONFIRMED`**.
-* **Thời gian hồi phục (Cooldown = 5000ms)**: Sau khi phát hiện thành công, hệ thống khóa nhận diện trong 5 giây để tránh gửi trùng lặp nhiều bản tin cứu nạn cùng lúc.
+1. **Độ chênh lệch biên độ (Margin Difference)**:
+   $$\text{Margin} = P_{\text{bawl}} - \max(P_{\text{noise}}, P_{\text{speech}})$$
+   * **Ngưỡng biên độ khắt khe**: $\text{Margin} \ge 0.60$ (đảm bảo $P_{\text{bawl}}$ hoàn toàn vượt trội so với cả nhiễu nền và giọng nói đàm thoại, loại bỏ trường hợp model phân vân).
+
+2. **Cơ chế tích lũy điểm tin cậy (Confidence Score Accumulation)**:
+   * Khi $\text{Margin} \ge 0.60$, hệ thống chuyển từ `DETECT_IDLE` sang `DETECT_CANDIDATE` và cộng dồn điểm tin cậy:
+     $$\text{accumulatedScore} \mathrel{+}= P_{\text{bawl}}$$
+   * **Ngưỡng điểm kích hoạt**: $\text{accumulatedScore} \ge 1.20$. Yêu cầu ít nhất 2 khung phân tích liên tiếp đạt điểm cao ($\approx 0.80 - 0.90$) hoặc 3 khung đạt chuẩn.
+   * **Thời lượng tối thiểu liên tục**: $\text{candidateDurMs} \ge 500\text{ ms}$ (tối thiểu qua 1 bước trượt $500\text{ ms}$).
+
+3. **Cơ chế Fast-Reject (Triệt tiêu quán tính nhiễu)**:
+   * Nếu tại bất kỳ khung nào trong giai đoạn `CANDIDATE` mà $\text{Margin} < 0.60$, máy trạng thái sẽ **reset ngay lập tức** về `IDLE` và xóa sạch điểm tích lũy:
+     $$\text{accumulatedScore} = 0.0$$
+   * Nhờ đó, các tiếng động ngẫu nhiên rải rác theo thời gian không bao giờ có thể cộng dồn điểm để gây báo động giả.
+
+4. **Xác nhận kích hoạt & Cooldown Lockout**:
+   * Khi thỏa mãn đồng thời $\text{accumulatedScore} \ge 1.20$ và $\text{candidateDurMs} \ge 500\text{ ms} \rightarrow$ Chuyển trạng thái sang **`CONFIRMED`**.
+   * **Thời gian khóa chống lặp (Cooldown Lockout = 5000ms)**: Sau khi phát hiện thành công, hệ thống khóa nhận diện đúng trong 5 giây, bằng đúng thời gian còi hú cảnh báo tại chỗ để tránh micro thu lại tiếng còi gây lặp vòng lặp vô tận.
 
 ---
 
@@ -194,7 +207,7 @@ $$\text{Margin} = P_{\text{bawl}} - \max(P_{\text{noise}}, P_{\text{speech}})$$
 Khi tiếng kêu cứu được xác nhận là `CONFIRMED`:
 
 1. **Hú còi cảnh báo tại chỗ**:
-   * Kích hoạt chân `ALARM_PIN` (GPIO 9) kéo còi hú liên tục trong **$7\text{ giây}$** để báo hiệu cho nạn nhân biết thiết bị đã tiếp nhận thành công.
+   * Kích hoạt chân `ALARM_PIN` (GPIO 9) kéo còi hú liên tục trong **$5\text{ giây}$** (đồng bộ chính xác bằng thời gian Cooldown Lockout $5000\text{ ms}$) để báo hiệu cho nạn nhân biết thiết bị đã tiếp nhận thành công.
 2. **Lưu trữ kiểm chứng lên thẻ nhớ SD**:
    * Ghi log sự kiện vào file CSV: `/recordings/detection_log.csv`.
    * Trích xuất nguyên vẹn file âm thanh WAV chất lượng cao $2\text{ giây}$ từ Ring Buffer lưu vào thư mục `/detections/det_xxxx.wav` để phục vụ công tác đối soát hiện trường và huấn luyện lại mô hình AI.
@@ -219,6 +232,8 @@ Khi tiếng kêu cứu được xác nhận là `CONFIRMED`:
 | **Ngưỡng VAD Bật/Tắt**| $\text{On} = 3.0 \times \text{Noise}$, $\text{Off} = 1.5 \times \text{Noise}$ | Tránh chập chờn cổng (Hysteresis effect) |
 | **Hold Time VAD** | $400\text{ ms}$ | Giữ cổng mở qua khoảng ngừng thở giữa các tiếng kêu |
 | **KWS Window** | $1000\text{ ms}$ ($16.000\text{ mẫu}$), Slide $500\text{ ms}$ | Cửa sổ trượt phân tích ngữ cảnh của mô hình Deep Learning |
-| **Ngưỡng Margin KWS**| $\text{Margin} > 0.45$ ($P_{\text{bawl}} - \max(P_{\text{noise}}, P_{\text{speech}})$) | Triệt tiêu triệt để báo động giả từ chim muông/gió bão |
-| **Thời gian Cooldown**| $5000\text{ ms}$ ($5\text{ giây}$) | Tránh spam bản tin LoRa khi nạn nhân kêu cứu kéo dài |
+| **Ngưỡng Margin KWS**| $\text{Margin} \ge 0.60$ ($P_{\text{bawl}} - \max(P_{\text{noise}}, P_{\text{speech}})$) | Triệt tiêu triệt để báo động giả từ chim muông/gió bão |
+| **Tích lũy điểm Score**| $\ge 1.20$ ($\sum P_{\text{bawl}}$ liên tục) | Yêu cầu ít nhất 2 khung liên tiếp độ tin cậy cao mới kích hoạt |
+| **Thời gian còi tại chỗ**| $5000\text{ ms}$ ($5\text{ giây}$) | Báo hiệu cho nạn nhân, tự động ngắt còi sau 5s |
+| **Cooldown Lockout**| $5000\text{ ms}$ ($5\text{ giây}$) | Khóa nhận diện trong thời gian hú còi để tránh tự kích hoạt |
 

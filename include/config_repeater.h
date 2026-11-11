@@ -67,13 +67,15 @@
 #define VAD_MAX_ACTIVE_DURATION_MS 30000
 
 // --- Tier-1: Keyword Spotting (KWS) ---
-#define KWS_WINDOW_SIZE_MS      1000
-#define KWS_WINDOW_SAMPLES      (I2S_SAMPLE_RATE * KWS_WINDOW_SIZE_MS / 1000)
-#define KWS_SLIDE_MS            500
-#define KWS_SLIDE_SAMPLES       (I2S_SAMPLE_RATE * KWS_SLIDE_MS / 1000)
-#define KWS_MARGIN_THRESHOLD    0.45f
-#define KWS_MIN_DURATION_MS     0
-#define KWS_COOLDOWN_MS         5000
+#define KWS_WINDOW_SIZE_MS          1000
+#define KWS_WINDOW_SAMPLES          (I2S_SAMPLE_RATE * KWS_WINDOW_SIZE_MS / 1000)
+#define KWS_SLIDE_MS                500
+#define KWS_SLIDE_SAMPLES           (I2S_SAMPLE_RATE * KWS_SLIDE_MS / 1000)
+#define KWS_MARGIN_THRESHOLD        0.60f   // Ngưỡng chênh lệch bawl - max(noise, speech)
+#define KWS_SCORE_TRIGGER_THRESHOLD 1.20f   // Ngưỡng điểm tích lũy confidence để xác nhận
+#define KWS_MIN_DURATION_MS         500     // Thời gian duy trì liên tục tối thiểu (ms)
+#define KWS_COOLDOWN_MS             5000    // Cooldown lockout sau khi kích hoạt (5s)
+#define ALARM_DURATION_MS           5000    // Thời gian còi hú cảnh báo tại chỗ (5s, đồng bộ cooldown)
 
 // --- Ring Buffer PSRAM ---
 #define RING_BUFFER_SIZE_SAMPLES (I2S_SAMPLE_RATE * 2) // 2 giây audio mono

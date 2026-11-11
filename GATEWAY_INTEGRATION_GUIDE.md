@@ -35,8 +35,25 @@ Trạm **Gateway** đóng vai trò là đầu mối tiếp nhận, giải mã v�
 ### Đặc tính chính của Gateway:
 * **Địa chỉ cố định (ID = 0)**: Toàn bộ gói tin khẩn cấp SOS và báo cáo điện áp pin Telemetry đều mặc định hướng đích về Gateway ID `0`.
 * **Giao tiếp PC qua USB Serial**: Tốc độ baud **115200**, định dạng dữ liệu chuẩn **NDJSON (Newline Delimited JSON)** giúp các ứng dụng máy tính (Python, Node.js, C#, Web Serial API) dễ dàng phân tích dữ liệu mà không sợ lỗi framing.
+* **Tự động nhận diện vai trò thiết bị (Device Role)**: Tự động phân loại nguồn gốc bản tin là từ thiết bị cầm tay (`NODE`) hay trạm lặp cố định (`REPEATER`) thông qua cờ giao thức 0-overhead.
 * **Hỗ trợ Chat hai chiều**: Chỉ huy có thể soạn tin nhắn gửi đích danh tới từng Node/Balo hoặc gửi Broadcast cho toàn bộ lực lượng ngoài hiện trường.
 * **Hoạt động thuần giao thức**: Loại bỏ hoàn toàn các phím bấm console đơn ký tự, đảm bảo không sinh dữ liệu rác lên kênh truyền máy tính.
+
+### 1.1. Cơ Chế Nhận Diện Vai Trò Nguồn Phát (Device Role Identification)
+
+Trong mạng lưới LoRa Mesh đa chặng, các gói tin có thể đi qua nhiều trạm lặp trước khi tới Gateway. Để ứng dụng quản trị trung tâm phân biệt chính xác bản tin phát ra từ **Node di động** (người/ba lô tuần tra) hay từ **Trạm Repeater cố định**, hệ thống sử dụng cờ nhị phân tích hợp sẵn trong Header gói tin `MeshPacket`:
+
+```text
+Trường flags (1 byte): [ B7 | B6 | B5 | B4 | B3: PKT_FLAG_FROM_NODE | B2: BINARY | B1: IS_ACK | B0: ACK_REQ ]
+```
+
+* **Cờ quy chuẩn**: `#define PKT_FLAG_FROM_NODE 0x08`
+* **Nguyên lý hoạt động**:
+  * Khi Node di động phát gói tin gốc $\rightarrow$ Tự động bật bit `0x08` trong trường `flags`.
+  * Khi Trạm lặp Repeater phát gói tin (KWS SOS, Heartbeat) $\rightarrow$ Bit `0x08` có giá trị `0`.
+  * Các trạm chuyển tiếp (Relay) bảo toàn 100% trường `flags` này dọc theo tuyến đường truyền.
+  * **Tại Gateway**: Firmware tự động giải mã `(pkt.flags & PKT_FLAG_FROM_NODE) ? "NODE" : "REPEATER"` và xuất tường minh trường `"role"` trong các bản tin JSON (`SOS`, `CHAT`, `HEARTBEAT`) đẩy lên máy tính PC.
+* **Ưu điểm**: **0 byte overhead** (không làm tăng kích thước gói LoRa), không phụ thuộc vào quy ước dải ID, tương thích ngược hoàn toàn.
 
 ---
 
@@ -155,7 +172,7 @@ CHAT:2001:146:Đội 1 lập tức rút về phía Đông do lũ quét\n
 
 | STT | Cú pháp lệnh | Chức năng thực hiện | Cơ chế truyền nhận |
 | :---: | :--- | :--- | :--- |
-| **1** | `ALARM:ALL:ON\n` | **Bật còi toàn bộ** các Trạm Lặp Repeater | Broadcast toàn mạng, thời lượng 7s |
+| **1** | `ALARM:ALL:ON\n` | **Bật còi toàn bộ** các Trạm Lặp Repeater | Broadcast toàn mạng, thời lượng 5s |
 | **2** | `ALARM:ALL:OFF\n` | **Tắt còi toàn bộ** các Trạm Lặp Repeater | Broadcast toàn mạng, ngắt còi lập tức |
 | **3** | `ALARM:<id>:ON\n` | **Bật còi tại Repeater chỉ định** | Unicast đích danh + Chờ ACK phản hồi |
 | **4** | `ALARM:<id>:OFF\n` | **Tắt còi tại Repeater chỉ định** | Unicast đích danh + Chờ ACK phản hồi |
@@ -179,6 +196,7 @@ CHAT:2001:146:Đội 1 lập tức rút về phía Đông do lũ quét\n
 {
   "type": "SOS",
   "src": 146,
+  "role": "NODE",
   "alert": "BAWL",
   "confidence": 94,
   "dir": "L",
@@ -188,6 +206,8 @@ CHAT:2001:146:Đội 1 lập tức rút về phía Đông do lũ quét\n
   "snr": 9.2
 }
 ```
+* `src`: ID của thiết bị phát cảnh báo gốc.
+* `role`: Vai trò thiết bị (`NODE` = Ba lô/người mang theo, `REPEATER` = Trạm lặp cố định).
 * `alert`: Loại cảnh báo (`BAWL` = Tiếng kêu khóc/cứu, `TEST` = Thử nghiệm).
 * `confidence`: Độ tin cậy nhận diện của AI (%).
 * `dir`: Hướng âm thanh (`L`: Trái, `R`: Phải, `C`: Giữa).
@@ -198,6 +218,7 @@ CHAT:2001:146:Đội 1 lập tức rút về phía Đông do lũ quét\n
 {
   "type": "CHAT",
   "src": 162,
+  "role": "NODE",
   "dest": 0,
   "text": "Báo cáo: Đã tìm thấy 02 nạn nhân, cần tiếp tế nước uống",
   "msg_id": 210,
@@ -367,9 +388,9 @@ Dưới đây là các yêu cầu và đặc tả kỹ thuật cần tuân thủ
 - Khi khởi động sẵn sàng:
   {"type":"GATEWAY_READY","node_id":0,"mac":"<mac_address>"}
 - Cảnh báo cứu nạn khẩn cấp từ hiện trường:
-  {"type":"SOS","src":<node_id>,"alert":"<BAWL|TEST>","confidence":<0-100>,"dir":"<L|R|C>","battery":<mv>,"msg_id":<num>,"rssi":<val>,"snr":<val>}
+  {"type":"SOS","src":<node_id>,"role":"<NODE|REPEATER>","alert":"<BAWL|TEST>","confidence":<0-100>,"dir":"<L|R|C>","battery":<mv>,"msg_id":<num>,"rssi":<val>,"snr":<val>}
 - Tin nhắn Chat từ hiện trường chuyển về:
-  {"type":"CHAT","src":<node_id>,"dest":0,"text":"<nội dung utf8>","msg_id":<num>,"hops":<num>,"rssi":<val>,"snr":<val>}
+  {"type":"CHAT","src":<node_id>,"role":"<NODE|REPEATER>","dest":0,"text":"<nội dung utf8>","msg_id":<num>,"hops":<num>,"rssi":<val>,"snr":<val>}
 - Cập nhật trạng thái tin nhắn do Gateway phát đi:
   {"type":"CHAT_STATUS","client_id":<id>,"msg_id":<num>,"status":"<SENDING|DELIVERED|FAILED>","reason":"<lý do nếu có>"}
 - Báo cáo định kỳ sức khỏe trạm lặp (Repeater):

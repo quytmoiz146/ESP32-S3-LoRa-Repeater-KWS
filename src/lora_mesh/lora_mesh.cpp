@@ -136,7 +136,7 @@ void lora_mesh_checkButton() {
       if (stableBtnState == LOW) {
         Serial.println("\n[BTN] Button (GPIO3) pressed -> Sending Test SOS to Gateway (dest: 0)...");
 #if defined(ALARM_PIN) && (ALARM_PIN >= 0)
-        g_alarm_end_ms = millis() + 7000;
+        g_alarm_end_ms = millis() + ALARM_DURATION_MS;
 #endif
         lora_mesh_sendSosBinary(ALERT_TEST, 99, DIR_CENTER, true /* requireAck */, GATEWAY_ID);
       }
@@ -650,7 +650,11 @@ static void sendAckPacket(uint8_t dest_id, uint16_t ack_msg_id) {
   ackPkt.magic = MESH_MAGIC;
   ackPkt.msg_id = ack_msg_id;
   ackPkt.msg_type = PKT_TYPE_ACK;
+#if defined(ROLE_NODE)
+  ackPkt.flags = PKT_FLAG_IS_ACK | PKT_FLAG_FROM_NODE;
+#else
   ackPkt.flags = PKT_FLAG_IS_ACK;
+#endif
   ackPkt.src_id = MY_NODE_ID;
   ackPkt.dest_id = dest_id;
 #if LORA_UNICAST_ROUTING_ENABLED
@@ -680,7 +684,11 @@ static void transmitPendingChat() {
   pkt.magic = MESH_MAGIC;
   pkt.msg_id = g_pending_chat.msg_id;
   pkt.msg_type = PKT_TYPE_CHAT;
+#if defined(ROLE_NODE)
+  pkt.flags = PKT_FLAG_ACK_REQ | PKT_FLAG_FROM_NODE;
+#else
   pkt.flags = PKT_FLAG_ACK_REQ;
+#endif
   pkt.src_id = MY_NODE_ID;
   pkt.dest_id = g_pending_chat.target;
 #if LORA_UNICAST_ROUTING_ENABLED
@@ -839,6 +847,10 @@ static void processIncomingPacket() {
 
   stats_rx_total++;
 
+  // Lưu hop_count ban đầu và xác định vai trò nguồn phát gốc (NODE / REPEATER)
+  uint8_t incomingHopCount = pkt.hop_count;
+  const char* srcRole = (pkt.flags & PKT_FLAG_FROM_NODE) ? "NODE" : "REPEATER";
+
   // Nhấp nháy LED_LORA 3 lần báo trạng thái nhận gói tin LoRa thành công
   lora_mesh_triggerLedBlink(3);
 
@@ -866,9 +878,6 @@ static void processIncomingPacket() {
   const char *typeStr = "DATA";
   if (pkt.msg_type == PKT_TYPE_SOS) {
     typeStr = "SOS";
-#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
-    g_alarm_end_ms = millis() + 7000; // Bật còi 7s khi nhận được SOS (cả repeater cũng kêu)
-#endif
   }
   else if (pkt.msg_type == PKT_TYPE_ACK || pkt.msg_type == PKT_TYPE_CHAT_ACK) {
     typeStr = "ACK";
@@ -892,8 +901,8 @@ static void processIncomingPacket() {
         snprintf(payloadInfo, sizeof(payloadInfo), "Batt:%.2fV", bin->battery_mv / 1000.0f);
 #if !defined(ROLE_GATEWAY)
         if (pkt.dest_id == MY_NODE_ID || pkt.dest_id == GATEWAY_ID) {
-          Serial.printf("{\"type\":\"HEARTBEAT\",\"src\":%u,\"battery\":%u,\"role\":\"REPEATER\",\"rssi\":%.1f,\"snr\":%.1f}\n",
-                        pkt.src_id, bin->battery_mv, rssi, snr);
+          Serial.printf("{\"type\":\"HEARTBEAT\",\"src\":%u,\"role\":\"%s\",\"battery\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
+                        pkt.src_id, srcRole, bin->battery_mv, rssi, snr);
         }
 #endif
       } else {
@@ -904,8 +913,8 @@ static void processIncomingPacket() {
         snprintf(payloadInfo, sizeof(payloadInfo), "%s %d%% [%s] | Batt:%.2fV",
                  alertName, bin->confidence, dirName, bin->battery_mv / 1000.0f);
         if (pkt.dest_id == MY_NODE_ID || pkt.dest_id == GATEWAY_ID) {
-          Serial.printf("{\"type\":\"SOS\",\"src\":%u,\"alert\":\"%s\",\"confidence\":%u,\"dir\":\"%s\",\"battery\":%u,\"msg_id\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
-                        pkt.src_id, alertName, bin->confidence, dirName, bin->battery_mv, pkt.msg_id, rssi, snr);
+          Serial.printf("{\"type\":\"SOS\",\"src\":%u,\"role\":\"%s\",\"alert\":\"%s\",\"confidence\":%u,\"dir\":\"%s\",\"battery\":%u,\"msg_id\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
+                        pkt.src_id, srcRole, alertName, bin->confidence, dirName, bin->battery_mv, pkt.msg_id, rssi, snr);
         }
       }
     }
@@ -917,14 +926,14 @@ static void processIncomingPacket() {
 
   if (pkt.next_hop != BROADCAST_ID) {
     MESH_LOG(
-        "[RX] %s #%u | Src:%u->Dest:%u (NextHop:%u, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
-        typeStr, pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.next_hop, pkt.sender_id, pkt.hop_count,
+        "[RX] %s #%u (%s) | Src:%u->Dest:%u (NextHop:%u, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
+        typeStr, pkt.msg_id, srcRole, pkt.src_id, pkt.dest_id, pkt.next_hop, pkt.sender_id, pkt.hop_count,
         rssi, snr, payloadInfo[0] ? payloadInfo : "none",
         formatPath(pkt).c_str());
   } else {
     MESH_LOG(
-        "[RX] %s #%u | Src:%u->Dest:%u (Flood, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
-        typeStr, pkt.msg_id, pkt.src_id, pkt.dest_id, pkt.sender_id, pkt.hop_count,
+        "[RX] %s #%u (%s) | Src:%u->Dest:%u (Flood, via:%u, hop:%u) | %.0fdBm/%.1fdB | %s | Path:%s\n",
+        typeStr, pkt.msg_id, srcRole, pkt.src_id, pkt.dest_id, pkt.sender_id, pkt.hop_count,
         rssi, snr, payloadInfo[0] ? payloadInfo : "none",
         formatPath(pkt).c_str());
   }
@@ -958,8 +967,8 @@ static void processIncomingPacket() {
   // 6. Xử lý khi nhận tin nhắn Chat gửi đích danh cho node này
   if (pkt.msg_type == PKT_TYPE_CHAT && (pkt.dest_id == MY_NODE_ID || pkt.dest_id == BROADCAST_ID)) {
     // Xuất chuỗi NDJSON cho PC / Smartphone App
-    Serial.printf("{\"type\":\"CHAT\",\"src\":%u,\"dest\":%u,\"text\":\"%s\",\"msg_id\":%u,\"hops\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
-                  pkt.src_id, pkt.dest_id, pkt.payload, pkt.msg_id, pkt.hop_count, rssi, snr);
+    Serial.printf("{\"type\":\"CHAT\",\"src\":%u,\"role\":\"%s\",\"dest\":%u,\"text\":\"%s\",\"msg_id\":%u,\"hops\":%u,\"rssi\":%.1f,\"snr\":%.1f}\n",
+                  pkt.src_id, srcRole, pkt.dest_id, pkt.payload, pkt.msg_id, pkt.hop_count, rssi, snr);
     if (g_chat_recv_cb) {
       g_chat_recv_cb(pkt.src_id, pkt.dest_id, pkt.payload, pkt.msg_id, pkt.hop_count, rssi, snr);
     }
@@ -976,11 +985,11 @@ static void processIncomingPacket() {
     if (strncmp(pkt.payload, "ALARM:", 6) == 0) {
       const char* sub = pkt.payload + 6;
       if (strncasecmp(sub, "ON", 2) == 0) {
-        uint16_t sec = 7;
+        uint16_t sec = 5;
         const char* secStr = strchr(sub, ':');
         if (secStr) {
           sec = (uint16_t)strtoul(secStr + 1, nullptr, 10);
-          if (sec == 0) sec = 7;
+          if (sec == 0) sec = 5;
         }
 #if defined(ALARM_PIN) && (ALARM_PIN >= 0)
         pinMode(ALARM_PIN, OUTPUT);
@@ -1020,6 +1029,13 @@ static void processIncomingPacket() {
 
   // Nếu gói tin gửi đích danh cho node này, dừng relay
   if (pkt.dest_id == MY_NODE_ID) {
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
+    // Nếu trạm Repeater này là đích trực tiếp của SOS gửi từ Node (chặng đầu tiên hop 0)
+    if (pkt.msg_type == PKT_TYPE_SOS && (pkt.flags & PKT_FLAG_FROM_NODE) && (incomingHopCount == 0)) {
+      g_alarm_end_ms = millis() + ALARM_DURATION_MS;
+      MESH_LOGLN("[ALARM] ✓ Destination Repeater received SOS directly from Node -> Alarm triggered (5s)");
+    }
+#endif
     return;
   }
 
@@ -1027,6 +1043,7 @@ static void processIncomingPacket() {
   // 6.5. Unicast Next-Hop Filtering:
   // Nếu gói tin chỉ định next_hop cụ thể khác BROADCAST_ID, và ta không phải next_hop đó
   // thì BỎ QUA không relay để tránh bão mạng và tiết kiệm pin toàn mạng!
+  // ĐẶC BIỆT: Khi bị SKIP thì TUYỆT ĐỐI KHÔNG HÚ CÒI!
   if (pkt.dest_id != BROADCAST_ID && pkt.next_hop != BROADCAST_ID) {
     if (pkt.next_hop != MY_NODE_ID) {
       MESH_LOG("[SKIP] %s #%u: Unicast targeted to NextHop %u (self is %u)\n",
@@ -1063,6 +1080,14 @@ static void processIncomingPacket() {
   pkt.next_hop = BROADCAST_ID;
 #endif
 
+  // 9.5. Kích hoạt còi tại chỗ nếu là trạm Repeater đầu tiên chuyển tiếp gói tin SOS từ Node
+#if defined(ALARM_PIN) && (ALARM_PIN >= 0)
+  if (pkt.msg_type == PKT_TYPE_SOS && (pkt.flags & PKT_FLAG_FROM_NODE) && (incomingHopCount == 0)) {
+    g_alarm_end_ms = millis() + ALARM_DURATION_MS;
+    MESH_LOGLN("[ALARM] ✓ 1st-Hop Repeater relaying SOS from Node -> Alarm triggered (5s)");
+  }
+#endif
+
   // 10. Relay
   if (relayPacket(pkt)) {
     stats_relayed++;
@@ -1094,7 +1119,11 @@ static bool sendPacketInternal(uint8_t msgType, uint8_t flags, const char *paylo
   pkt.magic = MESH_MAGIC;
   pkt.msg_id = nextMsgId++;
   pkt.msg_type = msgType;
+#if defined(ROLE_NODE)
+  pkt.flags = flags | PKT_FLAG_FROM_NODE;
+#else
   pkt.flags = flags;
+#endif
   pkt.src_id = MY_NODE_ID;
   pkt.dest_id = destId;
 #if LORA_UNICAST_ROUTING_ENABLED
@@ -1522,7 +1551,7 @@ bool lora_mesh_processAlarmCommand(const char* line) {
   const char* p = line + 6;
   uint8_t target = BROADCAST_ID;
   bool turnOn = false;
-  uint16_t durationSec = 7;
+  uint16_t durationSec = 5;
   bool requireAck = true;
 
   // 1. Lệnh toàn bộ Repeater: ALARM:ALL:ON, ALARM:ALL:OFF (hoặc phím tắt ALARM:ON, ALARM:OFF)

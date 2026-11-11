@@ -17,11 +17,12 @@
 #define PKT_TYPE_CHAT_ACK 6
 #define PKT_TYPE_CMD      7
 
-// --- Packet Flags (QoS & Định dạng) ---
-#define PKT_FLAG_NONE     0x00
-#define PKT_FLAG_ACK_REQ  0x01 // Yêu cầu trả lời ACK từ node đích (QoS)
-#define PKT_FLAG_IS_ACK   0x02 // Là gói phản hồi ACK
-#define PKT_FLAG_BINARY   0x04 // Payload là định dạng nhị phân siêu gọn
+// --- Packet Flags (QoS & Định dạng & Nhận diện Thiết bị) ---
+#define PKT_FLAG_NONE          0x00
+#define PKT_FLAG_ACK_REQ       0x01 // Yêu cầu trả lời ACK từ node đích (QoS)
+#define PKT_FLAG_IS_ACK        0x02 // Là gói phản hồi ACK
+#define PKT_FLAG_BINARY        0x04 // Payload là định dạng nhị phân siêu gọn
+#define PKT_FLAG_FROM_NODE     0x08 // 1 = Xuất phát từ Node di động | 0 = Xuất phát từ Repeater
 
 // ============================================================
 //  Định dạng nhị phân cảnh báo SOS (5 bytes)
@@ -166,10 +167,10 @@ bool lora_mesh_isChatPending();
 /// Gửi lệnh điều khiển còi báo động qua LoRa Mesh (tới 1 repeater hoặc broadcast toàn mạng)
 /// @param targetId ID của Repeater đích (hoặc BROADCAST_ID 255 cho tất cả repeater)
 /// @param turnOn true để bật còi, false để tắt còi
-/// @param durationSec Thời gian bật còi tính bằng giây (mặc định 7s)
+/// @param durationSec Thời gian bật còi tính bằng giây (mặc định 5s)
 /// @param requireAck Yêu cầu node đích phản hồi ACK (tự động false nếu targetId là BROADCAST_ID)
 /// @return true nếu gửi thành công
-bool lora_mesh_sendAlarmCommand(uint8_t targetId, bool turnOn, uint16_t durationSec = 7, bool requireAck = true);
+bool lora_mesh_sendAlarmCommand(uint8_t targetId, bool turnOn, uint16_t durationSec = 5, bool requireAck = true);
 
 /// Xử lý chuỗi lệnh điều khiển còi nhận từ cổng UART của Gateway
 /// 4 lệnh chuẩn:

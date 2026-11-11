@@ -29,8 +29,24 @@ Thiết bị **Node Cầm tay / Balo** phục vụ việc liên lạc khẩn c�
 
 * **Kết nối tầm gần (Smartphone)**: Dùng dịch vụ BLE tiêu chuẩn **Nordic UART Service (NUS)**.
 * **Kết nối tầm xa (LoRa Mesh)**: Hoạt động ở tần số 921.4 MHz, công suất phát cực đại +22dBm, tự động tìm đường qua các trạm lặp (Repeater) về Gateway (ID: 0).
+* **Tự động nhận diện vai trò (Role Flag `0x08`)**: Tự động đánh dấu cờ `PKT_FLAG_FROM_NODE` trong header gói tin để kích hoạt còi tại trạm Repeater đầu tiên và thông báo vai trò `NODE` về Gateway.
 * **Độ tin cậy cao (Stop-and-Wait ARQ)**: Tự động gửi lại tối đa 3 lần (timeout 2000ms), trả về trạng thái rõ ràng (`SENDING`, `DELIVERED`, `FAILED`).
 * **Không dùng phím tắt console**: Node hoạt động thuần túy qua giao thức chuẩn hóa (BLE / Serial command) để đảm bảo tính ổn định.
+
+### 1.1. Cơ Chế Nhận Diện Vai Trò & Phối Hợp Mạng (Device Role & Network Interaction)
+
+Khi tích hợp firmware cho thiết bị Node, macro định danh vai trò `-D ROLE_NODE` đóng vai trò then chốt trong việc đồng bộ hóa hành vi toàn mạng:
+
+1. **Đánh dấu cờ Header 0-overhead**:
+   * Khi `ROLE_NODE` được định nghĩa, mọi gói tin gốc do thiết bị này phát đi (SOS, Chat, ACK, Heartbeat) sẽ tự động bật cờ:
+     ```cpp
+     #define PKT_FLAG_FROM_NODE 0x08 // Bit 3 trong trường flags của MeshPacket
+     ```
+2. **Kích hoạt còi tại trạm Repeater chặng đầu tiên**:
+   * Khi Node phát bản tin khẩn cấp SOS: Trạm Repeater đầu tiên tiếp sóng trực tiếp (`hop_count == 0`) và được chọn làm chặng chuyển tiếp kế tiếp (`next_hop`) sẽ **ngay lập tức hú còi cảnh báo 5 giây tại chỗ** để xác nhận đã tiếp nhận tín hiệu cứu hộ thành công.
+   * Các trạm Repeater bị `[SKIP]` hoặc các trạm chuyển tiếp ở chặng 2, chặng 3 xa hơn sẽ không hú còi để tránh gây nhiễu âm thanh diện rộng.
+3. **Phân loại nguồn tin trên Gateway & Bản đồ tác chiến**:
+   * Nhờ cờ `PKT_FLAG_FROM_NODE`, Gateway trung tâm luôn giải mã chính xác nguồn phát là `"role": "NODE"` (ba lô tuần tra) thay vì trạm cố định `"role": "REPEATER"`, giúp Dashboard hiển thị đúng biểu tượng trên bản đồ.
 
 ---
 
@@ -189,6 +205,8 @@ Dưới đây là các yêu cầu và đặc tả kỹ thuật cần tuân thủ
   + Khi nhận tin từ mạng: {"type":"CHAT","node_id":"NODE<id>","src":<id>,"dest":<id>,"text":"<utf8>","msg_id":<num>,"hops":<num>,"rssi":<val>,"snr":<val>}
 
 4. YÊU CẦU TÍCH HỢP MÃ NGUỒN:
+- Cấu hình vai trò qua macro biên dịch: `-D ROLE_NODE`.
+- Khi phát bất kỳ gói tin nào qua mạng LoRa Mesh (SOS, Chat, ACK, Heartbeat), tự động gắn cờ `PKT_FLAG_FROM_NODE = 0x08` trong trường `flags` của header gói tin `MeshPacket` để kích hoạt còi tại Repeater chặng đầu tiên và thông báo vai trò "NODE" về Gateway.
 - Không sử dụng các phím tắt console ký tự đơn lẻ.
 - Tạo mã nguồn gọn gàng, tách lớp rõ ràng (driver LoRa Mesh riêng, BLE NUS link riêng).
 - Đảm bảo trong loop() gọi định kỳ lora_mesh_loop() và xử lý đệm lệnh từ BLE/Serial mà không bị nghẽn (non-blocking).
